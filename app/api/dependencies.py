@@ -12,28 +12,33 @@ from app.models.user import User
 from app.core.security.pass_hash import verify_password
 
 # Схемы аутентификации
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/kyc/token")  # Только для эндпоинта /token
-jwt_bearer = HTTPBearer()  # Для всех остальных защищенных роутов
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/kyc/token")  # Для эндпоинта /token
+jwt_bearer = HTTPBearer()  # Для других защищённых роутов
 
 class TokenData(BaseModel):
-    username: Optional[str] = None
-    user_id: Optional[int] = None
+    email: Optional[str] = None
+    user_id: Optional[str] = None
     scopes: list[str] = []
 
-async def authenticate_user(username: str, password: str) -> User:
-    """Аутентификация пользователя по username и password"""
+async def authenticate_user(email: str, password: str) -> User:
+    """Аутентификация пользователя по email и password"""
     try:
-        user = await User.get(username=username)
+        user = await User.get(email=email)
         if not verify_password(password, user.password_hash):
-            logger.warning(f"Failed login attempt for user {username}")
+            logger.warning(f"Failed login attempt for user {email}")
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Incorrect username or password",
+                detail="Incorrect email or password",
                 headers={"WWW-Authenticate": "Bearer"},
+            )
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Inactive user"
             )
         return user
     except DoesNotExist:
-        logger.warning(f"User not found: {username}")
+        logger.warning(f"User not found: {email}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="User not found",
@@ -70,7 +75,7 @@ def create_access_token(
 async def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(jwt_bearer)
 ) -> User:
-    """Получение текущего пользователя из JWT токена (простая проверка)"""
+    """Получение текущего пользователя из JWT токена"""
     token = credentials.credentials
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
@@ -81,9 +86,14 @@ async def get_current_user(
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
         user_id = payload.get("user_id")
-        username = payload.get("sub")
+        email = payload.get("sub")
         
-        user = await User.get(id=user_id) if user_id else await User.get(username=username)
+        if user_id:
+            user = await User.get(id=user_id)
+        elif email:
+            user = await User.get(email=email)
+        else:
+            raise credentials_exception
         
         if not user.is_active:
             raise HTTPException(
@@ -105,9 +115,9 @@ async def get_current_active_user(user: User = Depends(get_current_user)) -> Use
     return user
 
 async def admin_required(user: User = Depends(get_current_user)) -> User:
-    """Проверка прав администратора"""
-    if not user.is_admin:
-        logger.warning(f"Admin access denied for user: {user.username}")
+    """Проверка прав администратора через роли"""
+    if not await user.has_role("admin"):
+        logger.warning(f"Admin access denied for user: {user.email}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Admin privileges required"
@@ -117,9 +127,14 @@ async def admin_required(user: User = Depends(get_current_user)) -> User:
 async def kyc_access_required(user: User = Depends(get_current_user)) -> User:
     """Проверка доступа к KYC"""
     if not user.kyc_access:
-        logger.warning(f"KYC access denied for user: {user.username}")
+        logger.warning(f"KYC access denied for user: {user.email}")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="KYC access required"
         )
     return user
+
+async def get_current_admin_user(current_user: User = Depends(get_current_user)) -> User:
+    if not await current_user.has_role("admin"):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorized")
+    return current_user

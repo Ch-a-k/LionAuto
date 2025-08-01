@@ -5,12 +5,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from loguru import logger
 from app.core.config import settings
-from app.api.routes import user_router, documents_router, customers_router
+from app.api.routes import user_router, documents_router, customers_router, role_router, user_auction_router
 from app.core.database import DatabaseManager
 from app.services.init_service import InitService
 from app.api.dependencies import get_current_user
 from app.services.kafka.producer import KafkaProducer
 import clamd
+from app.services.kafka.admin import KafkaAdmin
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -31,8 +32,12 @@ async def lifespan(app: FastAPI):
         logger.error(f"Unexpected error verifying ClamAV: {str(e)}")
     db = DatabaseManager()
     await db.init()
+    await InitService.init_roles_permissions()
     await InitService.create_default_user()
     app.state.kafka_producer = KafkaProducer()
+    admin = KafkaAdmin()
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, admin.create_topics)
     yield
     logger.info("Shutting down...")
     app.state.kafka_producer.flush()
@@ -72,6 +77,20 @@ app.include_router(
     customers_router,
     prefix="/kyc",
     tags=["Customers"],
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    role_router,
+    prefix="/role",
+    tags=["Role"],
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    user_auction_router,
+    prefix="/user_auction",
+    tags=["User Auctions"],
     dependencies=[Depends(get_current_user)]
 )
 

@@ -60,7 +60,15 @@ class Settings(BaseSettings):
     CLAMAV_HOST: str
     CLAMAV_PORT: int
 
+    # Encryption
+    AUCTION_ENCRYPTION_KEY: str
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @property
+    def ENCRYPTION_KEY(self) -> bytes:
+        # Преобразуем hex-строку в байты
+        return bytes.fromhex(self.AUCTION_ENCRYPTION_KEY)
 
     @staticmethod
     def get_user_secret_key(user_id: int, user_salt: str = "") -> str:
