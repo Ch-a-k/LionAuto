@@ -1,0 +1,23 @@
+# Optional build arg for use elsewhere
+FROM clamav/clamav:1.2.0
+
+# Install dependencies
+RUN apk add --no-cache bash curl
+
+# Create directories and set permissions
+RUN mkdir -p /run/clamav && \
+    chown clamav:clamav /run/clamav && \
+    chmod 750 /run/clamav
+
+# Copy config and entrypoint
+COPY freshclam.conf /etc/clamav/freshclam.conf
+COPY scripts/clamav-entrypoint.sh /clamav-entrypoint.sh
+
+# Set permissions and verify
+RUN chmod +x /clamav-entrypoint.sh && \
+    ls -la /clamav-entrypoint.sh && \
+    cat /clamav-entrypoint.sh
+
+VOLUME ["/var/lib/clamav"]
+
+ENTRYPOINT ["/bin/bash", "/clamav-entrypoint.sh"]
