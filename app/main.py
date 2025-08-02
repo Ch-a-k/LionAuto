@@ -5,7 +5,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from loguru import logger
 from app.core.config import settings
-from app.api.routes import user_router, documents_router, customers_router, role_router, user_auction_router
+from app.api.routes import (
+    user_router, documents_router, customers_router, 
+    role_router, user_auction_router, lots_router,
+    watchlist_router
+    )
 from app.core.database import DatabaseManager
 from app.services.init_service import InitService
 from app.api.dependencies import get_current_user
@@ -94,6 +98,19 @@ app.include_router(
     dependencies=[Depends(get_current_user)]
 )
 
+app.include_router(
+    lots_router,
+    prefix="/lots",
+    tags=["Lots"],
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    watchlist_router,
+    prefix="/watchlist",
+    tags=["Watchlist"],
+    dependencies=[Depends(get_current_user)]
+)
 
 async def main():
     """ Main function to run FastAPI with multiple workers. """

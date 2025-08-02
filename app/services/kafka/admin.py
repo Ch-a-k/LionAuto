@@ -22,6 +22,8 @@ class KafkaAdmin:
             # Системные
             NewTopic("auction.system.alerts", num_partitions=1, replication_factor=1),
             NewTopic("auction.user.notifications", num_partitions=1, replication_factor=1),
+
+            NewTopic("auction.lot.watch_updates", num_partitions=3, replication_factor=1),
         ]
 
         fs = self.admin_client.create_topics(topics)
