@@ -33,6 +33,7 @@ pillow = "^11.2.1"
 clamd = "^1.0.2"
 pypdf2 = "^3.0.1"
 aioredis = "^2.0.1"
+playwright = "^1.54.0"
 
 
 [build-system]

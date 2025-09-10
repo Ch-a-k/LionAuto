@@ -10,10 +10,15 @@ RUN apt-get update && apt-get install -y \
     curl wget unzip python3-dev netcat-openbsd \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+# Даем права пользователю celeryuser на Python директории
+RUN chown -R celeryuser:celeryuser /usr/local/lib/python3.12 \
+    && chown -R celeryuser:celeryuser /usr/local/include/python3.12 \
+    && chown -R celeryuser:celeryuser /usr/local/bin
+
 # Переменные окружения
 ENV HOME=/home/celeryuser
 ENV PROJECT_ROOT=$HOME/app
-ENV PYTHONDONTWRITEBYTECODE=1 
+ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONBREAKPOINT=ipdb.set_trace
 ENV PATH="$HOME/.local/bin:$PATH"
