@@ -11,18 +11,6 @@ import aiosqlite
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 
-ENG_WEEKDAYS = {
-    0: "Monday",
-    1: "Tuesday",
-    2: "Wednesday",
-    3: "Thursday",
-    4: "Friday",
-    5: "Saturday",
-    6: "Sunday",
-}
-
-
-
 def _today_utc_date() -> date:
     return datetime.now(timezone.utc).date()
 
@@ -32,10 +20,6 @@ def _to_mmddyyyy_utc(dt: datetime) -> str:
         dt = dt.replace(tzinfo=timezone.utc)
     dt = dt.astimezone(timezone.utc)
     return dt.strftime("%m/%d/%Y")
-
-def _mmddyyyy_today_utc() -> str:
-    return _to_mmddyyyy_utc(datetime.now(timezone.utc))
-
 
 # =========================
 # Хранилище сессий (SQLite)
@@ -222,24 +206,6 @@ class CopartBot:
         yard_qs = (qs.get("yardNum") or [None])[0]
         return (yard or yard_qs, date_path)
 
-    async def _ensure_on_sale_list(self, expected_url: str, *, attempts: int = 3) -> bool:
-        exp_yard, exp_date = self._sale_keys(expected_url)
-        for i in range(1, attempts + 1):
-            cur = self.page.url
-            cur_yard, cur_date = self._sale_keys(cur)
-            ok = ("/saleListResult/" in urlparse(cur).path) and (cur_yard == exp_yard) and (cur_date == exp_date)
-            if ok:
-                return True
-
-            print(f"⚠️ Не на нужной saleList (got: {cur_yard}/{cur_date}, need: {exp_yard}/{exp_date}) — попытка {i}/{attempts}")
-            await self.page.goto(expected_url, wait_until="domcontentloaded")
-            try:
-                await self._wait_table_ready(hard_timeout=20000)
-                await self._scroll_to_bottom()
-            except Exception:
-                pass
-        return False
-
     async def _ensure_on_lot(self, expected_url: str, *, attempts: int = 3) -> bool:
         exp_lot = self._lot_id_from_url(expected_url)
         for i in range(1, attempts + 1):
@@ -357,28 +323,6 @@ class CopartBot:
 
         return None
 
-    async def get_regions_for_date(self, target: Optional[date] = None) -> List[Dict[str, str]]:
-        """
-        Возвращает регионы (таймслот, название, ссылка) на указанную дату (UTC).
-        По умолчанию — сегодня по UTC.
-        """
-        target = target or _today_utc_date()
-        target_str = target.strftime("%m/%d/%Y")  # UTC-дата в формате календаря
-
-        items = await self.get_auction_links()
-        regions = []
-        for it in items:
-            raw_date = (it.get("date") or "").strip()
-            if not raw_date:
-                raw_date = self._extract_date_from_href(it.get("href") or "") or ""
-            if raw_date == target_str:
-                regions.append({
-                    "time": (it.get("time") or "").strip(),
-                    "title": (it.get("title") or "").strip(),
-                    "link": (it.get("href") or "").strip(),
-                })
-        return regions
-
 
     async def get_lot_details(self, lot_url: str) -> Dict[str, Any]:
         """
@@ -453,110 +397,6 @@ class CopartBot:
         """)
         details["lot_link"] = lot_url
         return details
-
-    # ---------- auctionsCalendar: live / inactive ----------
-    async def get_calendar_live_status(self) -> Dict[str, List[Dict[str, str]]]:
-        """
-        Собирает {active:[], inactive:[]} со структурой:
-        { date:'MM/DD/YYYY', time:'HH:MM AM/PM', title:'CT - Hartford (Live)', href:'...', is_live:bool }
-        Live определяем по наличию .fa-li-live поблизости И/ИЛИ по "(Live)" в тексте.
-        """
-        await self.page.goto("https://www.copart.com/auctionCalendar", wait_until="domcontentloaded")
-        await self._maybe_accept_cookies()
-        await self.page.wait_for_selector("a[data-url]", timeout=20000)
-        await self._scroll_to_bottom(step=1200, max_iters=6)
-        await self.page.wait_for_timeout(300)
-
-        data = await self.page.evaluate(r"""
-        () => {
-        const toAbs = (u) => new URL(u, window.location.origin).href;
-
-        // Карта дат из THEAD (столбцы)
-        const headDates = [];
-        const table = document.querySelector("a[data-url]")?.closest("table") || document.querySelector("table");
-        if (table) {
-            const headRow = table.querySelector("thead tr");
-            if (headRow) {
-            Array.from(headRow.children).forEach((cell, idx) => {
-                let txt = (cell.textContent || "").trim().replace(/\s*\n\s*/g, " ");
-                const m = txt.match(/\b\d{2}\/\d{2}\/\d{4}\b/);
-                headDates[idx] = m ? m[0] : "";
-            });
-            }
-        }
-
-        const items = [];
-        const anchors = Array.from(document.querySelectorAll("a[data-url]"));
-        for (const a of anchors) {
-            const cell = a.closest("td,th");
-            const row  = cell?.parentElement || a.closest("tr, li, div, section");
-
-            let timeText = "", dateText = "";
-            if (row && cell && row.children && row.children.length) {
-            const rowCells = Array.from(row.children);
-            const colIndex = rowCells.indexOf(cell);
-            const firstCell = rowCells[0];
-            if (firstCell) {
-                const raw = (firstCell.textContent || "").trim();
-                const m = raw.match(/\b\d{1,2}:\d{2}\s?(AM|PM)\b/i);
-                timeText = m ? m[0] : raw;
-            }
-            dateText = (headDates[colIndex] || "").trim();
-            } else {
-            const raw = (row?.textContent || "").trim();
-            const tm = raw.match(/\b\d{1,2}:\d{2}\s?(AM|PM)\b/i);
-            timeText = tm ? tm[0] : "";
-            const dm = raw.match(/\b\d{2}\/\d{2}\/\d{4}\b/);
-            dateText = dm ? dm[0] : "";
-            }
-
-            const title = (a.textContent || "").replace(/\s+/g, " ").trim();
-            const hrefAttr = a.getAttribute("href") || a.getAttribute("data-url") || "";
-            const href = toAbs(hrefAttr);
-
-            // live: иконка рядом или "(Live)" в тексте
-            let is_live = /\(Live\)/i.test(title);
-            if (!is_live) {
-            const scope = row || a.closest("li, tr, td, div") || a.parentElement || document;
-            if (scope && scope.querySelector("i.fa-li-live, i.fa-circle.fa-li-live")) is_live = true;
-            }
-
-            items.push({ date: dateText, time: timeText, title, href, is_live });
-        }
-        return items;
-        }
-        """)
-
-        # Постобработка на Python: если дата в колонке пустая — берём из href
-        active, inactive = [], []
-        for it in data:
-            d = (it.get("date") or "").strip()
-            if not d:
-                d = self._extract_date_from_href(it.get("href") or "") or ""
-            norm = {
-                "date": d,
-                "time": (it.get("time") or "").strip(),
-                "title": (it.get("title") or "").strip(),
-                "href": (it.get("href") or "").strip(),
-                "is_live": bool(it.get("is_live")),
-            }
-            (active if norm["is_live"] else inactive).append(norm)
-        return {"active": active, "inactive": inactive}
-
-
-    async def _debug_calendar_counters(self):
-        try:
-            counts = await self.page.evaluate(r"""
-            () => ({
-            liveIcons: document.querySelectorAll('i.fa-circle.fa-li-live, i.fa-li-live').length,
-            grayIcons: document.querySelectorAll('i.fa-circle.fa-li-gray, i.fa-li-gray').length,
-            anchors:   document.querySelectorAll('a[data-url]').length
-            })
-            """)
-            print("DBG calendar:", counts)
-        except Exception as e:
-            print("DBG calendar error:", e)
-
 
         # ------ helpers: клик без автоскролла ------
     async def _js_click_no_scroll(self, locator) -> bool:
@@ -660,127 +500,6 @@ class CopartBot:
         return True
 
 
-    async def click_live_slot_and_join(self, link: str, *, wait_modal_timeout: int = 15000) -> bool:
-        """
-        Находится на /auctionCalendar. Кликает по live-ссылке БЕЗ скролла,
-        ждёт модалку "Live auction in progress", жмёт "Join live auction".
-        Возвращает True, если получилось.
-        """
-        # Нормализуем ссылку (на странице могут быть относительные href/data-url)
-        abs_link = await self.page.evaluate("(u) => new URL(u, window.location.origin).href", link)
-
-        # Ищем целевой <a> разными вариантами (href | data-url | endsWith)
-        loc = self.page.locator(f"a[href='{abs_link}'], a[data-url='{abs_link}']")
-        if not await loc.count():
-            loc = self.page.locator(f"a[data-url$='{link}'], a[href$='{link}']")
-
-        # Если не нашли — обновимся/подгрузим вью
-        if not await loc.count():
-            await self.page.wait_for_selector("a[data-url]", timeout=8000)
-            if not await loc.count():
-                print("❌ Не нашёл live-ссылку на странице календаря.")
-                return False
-
-        # JS-клик без прокрутки (сохранить/восстановить scroll, временно отключить scrollIntoView)
-        try:
-            handle = await loc.first.element_handle()
-            await self.page.evaluate("""
-            (el) => {
-            const sx = window.scrollX, sy = window.scrollY;
-            const orig = Element.prototype.scrollIntoView;
-            Element.prototype.scrollIntoView = function(){}; // блокируем автопрокрутку
-            try {
-                // клик как пользовательский MouseEvent
-                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-            } finally {
-                // восстанавливаем позицию и поведение сразу после клика
-                setTimeout(() => {
-                window.scrollTo(sx, sy);
-                Element.prototype.scrollIntoView = orig;
-                }, 0);
-            }
-            }
-            """, handle)
-        except Exception as e:
-            print(f"⚠️ JS-клик не удался, fallback: {e}")
-            # как крайний случай — мягкий переход (но это может прокрутить)
-            await self.page.goto(abs_link, wait_until="domcontentloaded")
-
-        # Проверим, что мы всё ещё на календаре (по ТЗ — не уходим со страницы до Join)
-        try:
-            if "/auctionCalendar" not in self.page.url:
-                # если вдруг SPA дернула навигацию — вернёмся
-                await self.page.goto("https://www.copart.com/auctionCalendar", wait_until="domcontentloaded")
-        except Exception:
-            pass
-
-        # Ждём модальный статус
-        try:
-            await self.page.wait_for_selector("p[data-uname='modalStatustxt']", timeout=wait_modal_timeout)
-            # иногда текст всплывает с задержкой — дадим тикануть
-            await self.page.wait_for_timeout(200)
-        except Exception as e:
-            print(f"⚠️ Модалка со статусом live не появилась: {e}")
-
-        # Жмём Join
-        try:
-            join_btn = self.page.locator("#liveJoinAuction[data-uname='joinLiveAuctionbtn']")
-            await join_btn.wait_for(state="visible", timeout=10000)
-            # жмём тоже без автоскролла (на всякий случай)
-            handle_join = await join_btn.element_handle()
-            await self.page.evaluate("""
-            (el) => {
-            const sx = window.scrollX, sy = window.scrollY;
-            const orig = Element.prototype.scrollIntoView;
-            Element.prototype.scrollIntoView = function(){};
-            try {
-                el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-            } finally {
-                setTimeout(() => {
-                window.scrollTo(sx, sy);
-                Element.prototype.scrollIntoView = orig;
-                }, 0);
-            }
-            }
-            """, handle_join)
-        except Exception as e:
-            print(f"❌ Не удалось нажать Join live auction: {e}")
-            return False
-
-        # Дождёмся загрузки лайв-дашборда
-        return await self.wait_for_live_dashboard()
-
-    async def save_page_html(self, prefix: str = "copart_page") -> str:
-        """
-        Сохраняет текущий HTML и скриншот локально в ./debug_pages/
-        Возвращает путь к HTML.
-        """
-        from datetime import datetime as _dt
-        from pathlib import Path
-
-        # создаём папку debug_pages рядом со скриптом
-        out_dir = Path(__file__).parent / "debug_pages"
-        out_dir.mkdir(parents=True, exist_ok=True)
-
-        ts = _dt.utcnow().strftime("%Y%m%d-%H%M%S")
-        html_path = out_dir / f"{prefix}-{ts}.html"
-        png_path  = out_dir / f"{prefix}-{ts}.png"
-
-        # сохраняем HTML
-        html = await self.page.content()
-        html_path.write_text(html, encoding="utf-8")
-        print(f"💾 HTML сохранён: {html_path}")
-
-        # сохраняем скриншот (если получится)
-        try:
-            await self.page.screenshot(path=str(png_path), full_page=True)
-            print(f"🖼  Скриншот сохранён: {png_path}")
-        except Exception as e:
-            print(f"⚠️ Скриншот не удалось сохранить: {e}")
-
-        return str(html_path.resolve())
-
-
     async def wait_for_live_dashboard(self, *, timeout_ms: int = 30000) -> bool:
         try:
             # Быстро проверим «живые» маркёры в любом фрейме:
@@ -796,137 +515,6 @@ class CopartBot:
                 pass
             return False
 
-
-
-    async def log_bid_amount_every_second(self, seconds: int = 30) -> None:
-        """
-        Каждую секунду читает value у input[data-uname='bidAmount'] и печатает в консоль.
-        Формат: 2025-09-12T14:23:45.123Z | bidAmount="$3,550"
-        """
-        import asyncio
-        from datetime import datetime, timezone
-
-        inp = self.page.locator("input[data-uname='bidAmount']").first
-        await inp.wait_for(state="visible", timeout=8000)
-
-        end = asyncio.get_event_loop().time() + seconds
-        while asyncio.get_event_loop().time() < end:
-            try:
-                val = await inp.input_value()
-            except Exception:
-                val = ""
-            ts = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-            print(f"{ts} | bidAmount={val!s}")
-            await asyncio.sleep(1.0)
-
-
-    async def get_bidding_dialer(self, timeout_ms: int = 30000):
-        """
-        Возвращает Locator на bidding-dialer. Бросает, если нет.
-        """
-        dialer = self.page.locator("div.auctionrunningdiv-MACRO >> bidding-dialer-refactor")
-        await dialer.first.wait_for(state="visible", timeout=timeout_ms)
-        return dialer.first
-
-    async def extract_current_lot_details_live(self) -> Dict[str, Any]:
-        """
-        Считывает правую панель деталей текущего лота на live-дашборде.
-        Возвращает словарь по возможным меткам (Location, Doc Type, Odometer, Est. Retail Value,
-        Primary Damage, Secondary Damage, Highlights, VIN, Body Style, Color, Engine Type, Cylinders,
-        Drive, Fuel, Keys, Special Note, ...).
-        """
-        await self.page.wait_for_selector("section.lot-details-wrapper-MACRO", timeout=15000)
-
-        # Универсальный сборщик: идём по всем "label -> value" парам
-        details = await self.page.evaluate(r"""
-        () => {
-          const root = document.querySelector("section.lot-details-wrapper-MACRO");
-          const out = {};
-          if (!root) return out;
-
-          const text = (el) => (el ? (el.textContent || "").replace(/\s+/g, " ").trim() : "");
-          const rows = root.querySelectorAll("[data-uname='lot-details-label']");
-
-          rows.forEach(lbl => {
-            const name = text(lbl);
-            // Значение обычно в [data-uname='lot-details-value'] в пределах той же "itemrow"
-            const row = lbl.closest(".itemrow") || lbl.parentElement;
-            let val = "";
-            if (row) {
-              const v1 = row.querySelector("[data-uname='lot-details-value']");
-              if (v1) val = text(v1);
-              else {
-                // VIN может быть внутри компонента
-                const vinA = row.querySelector("vin-number a");
-                if (vinA) val = text(vinA);
-              }
-            }
-            if (name) out[name] = val;
-          });
-
-          // Дополнительно — Highlights (если не попал общим правилом)
-          if (!out["Highlights"]) {
-            const hi = root.querySelector("#copart_COPART366A_lotDetailIconCodes_span, [id*='_lotDetailIconCodes_span']");
-            if (hi) {
-              const spans = Array.from(hi.querySelectorAll("span[title], span"));
-              const vals = spans.map(s => text(s)).filter(Boolean);
-              if (vals.length) out["Highlights"] = Array.from(new Set(vals)).join(", ");
-            } else {
-              // Иногда Highlights в явной паре label->value
-              const hiRow = Array.from(root.querySelectorAll(".itemrow")).find(r => /Highlights/i.test(text(r)));
-              if (hiRow) {
-                const v = hiRow.querySelector("[data-uname='lot-details-value']");
-                if (v) out["Highlights"] = text(v);
-              }
-            }
-          }
-
-          // Нормализация ключей (чтобы было удобно маппить)
-          const norm = {};
-          const map = {
-            "Location": "location",
-            "Doc Type": "doc_type",
-            "Odometer": "odometer",
-            "Est. Retail Value": "est_retail_value",
-            "Sublot Location": "sublot_location",
-            "Primary Damage": "primary_damage",
-            "Secondary Damage": "secondary_damage",
-            "Highlights": "highlights",
-            "VIN": "vin",
-            "Body Style": "body_style",
-            "Color": "color",
-            "Engine Type": "engine_type",
-            "Cylinders": "cylinders",
-            "Drive": "drive",
-            "Fuel": "fuel",
-            "Keys": "keys",
-            "Special Note": "special_note"
-          };
-
-          for (const [k, v] of Object.entries(out)) {
-            const key = map[k] || k.toLowerCase().replace(/\s+/g, "_");
-            norm[key] = v;
-          }
-
-          return norm;
-        }
-        """)
-
-        # Добавим текущий URL дашборда
-        details["dashboard_url"] = self.page.url
-        return details
-
-    async def _auction_widget_id_from_url(self) -> str | None:
-        try:
-            p = urlparse(self.page.url)
-            print(f"CURRENT URL: {p}")
-            det = (parse_qs(p.query).get("auctionDetails") or [""])[0]  # "135-A"
-            if not det:
-                return None
-            wid = det.replace("-", "")  # "135A"
-            return f"#widget-COPART{wid}"
-        except Exception:
-            return None
 
     async def current_live_auction_name(self) -> str:
         """
@@ -968,27 +556,6 @@ class CopartBot:
     def _base_title(s: str) -> str:
         return (s or "").split("(")[0].strip().lower()
 
-    async def _live_matches_choice(self, chosen: Dict[str,str]) -> bool:
-        """
-        Проверяет, что открытый live-дашборд действительно про тот слот, который мы выбирали.
-        Сейчас сравниваем по 'base title' (без '(Live)') и по дате, если её можно достать из URL.
-        """
-        on_name = await self.current_live_auction_name()
-        want_name = self._base_title(chosen.get("title",""))
-        on_base  = self._base_title(on_name)
-        ok_name  = (want_name and on_base and want_name in on_base) or (on_base in want_name)
-
-        # дата из выбранного href
-        want_date = self._extract_date_from_href(chosen.get("href","") or "") or (chosen.get("date") or "").strip()
-        # дата из текущего URL (часто есть saleDate=)
-        cur_date = self._extract_date_from_href(self.page.url) or ""
-
-        ok_date = True
-        if want_date and cur_date:
-            ok_date = (want_date == cur_date)
-
-        print(f"🔎 Валидация live: on='{on_name}' base='{on_base}' want='{want_name}'  date_on='{cur_date}' want='{want_date}'  → ok_name={ok_name} ok_date={ok_date}")
-        return bool(ok_name and ok_date)
 
     # ---------- bidding ----------
 
@@ -1141,6 +708,8 @@ class CopartBot:
         except Exception as e:
             print(f"❌ bid_current_lot failed: {e}")
             return False
+        
+        
     @staticmethod
     def _widget_id_from_details(details: str | None) -> str | None:
         """
@@ -1332,19 +901,6 @@ class CopartBot:
         except Exception:
             return None
 
-    async def track_bid_amounts(self, seconds: int = 30, interval: float = 1.0) -> List[Dict[str, Any]]:
-        """
-        Каждую секунду читает bidAmount и возвращает список замеров:
-        [{ts: '2025-09-08T15:04:05Z', amount: '$4,300'}, ...]
-        """
-        out: List[Dict[str, Any]] = []
-        end = asyncio.get_event_loop().time() + seconds
-        while asyncio.get_event_loop().time() < end:
-            amt = await self.read_bid_amount()
-            out.append({"ts": datetime.utcnow().isoformat() + "Z", "amount": amt})
-            await asyncio.sleep(interval)
-        return out
-
 
 # ======================
 # Пример использования (рефакторинг: честные логи, без лишнего)
@@ -1361,7 +917,7 @@ async def main():
     PASSWORD = os.getenv("COPART_PASS", "newpass0408")
     HEADLESS       = os.getenv("HEADLESS", "1") == "0"
     LIVE_TITLE_HINT= (os.getenv("COPART_LIVE_TITLE") or "").strip()
-    TRACK_SECONDS  = int(os.getenv("COPART_TRACK_SECS", "15") or "0")
+    TRACK_SECONDS  = int(os.getenv("COPART_TRACK_SECS", "120") or "0")
     DO_BID         = os.getenv("COPART_DO_BID", "0") == "1"
 
     
@@ -1450,27 +1006,51 @@ async def main():
         except Exception:
             pass
         
-        DO_BID = True
-        # 5) (опционально) кликнуть Bid
-        if DO_BID:
-            # просто поставить текущую «шаговую» ставку
-            await bot.bid_current_lot()
 
-            # ввести вручную 5000 и потом нажать Bid
-            await bot.bid_current_lot(amount=4000)
-
-            # альтернативно строкой с валютой — нормализуется
-            await bot.bid_current_lot(amount="$4,500")
-
-            # сделать три быстрых клика (если amount не задан)
-            await bot.bid_current_lot(times=3, spacing_sec=0.8)
-
-        # 6) Логировать bidAmount каждую секунду N секунд из того фрейма, где он найден
+        # 5) Логировать bidAmount каждую секунду N секунд из того фрейма, где он найден
         if TRACK_SECONDS > 0:
             try:
-                await bot.stream_bid_amounts(seconds=TRACK_SECONDS)
+                task = asyncio.create_task(bot.stream_bid_amounts(seconds=TRACK_SECONDS))
+                print(f"▶️ Запустил фоновое логирование bidAmount на {TRACK_SECONDS} сек.")
             except Exception as e:
-                print(f"⚠️ Не удалось логировать bidAmount: {e}")
+                print(f"⚠️ Не удалось запустить логирование bidAmount: {e}")
+
+
+        DO_BID = True
+        # 6) (опционально) кликнуть Bid
+        if DO_BID:
+            print("🟢 Режим ручных ставок активирован. Вводи 'stop' или 'q', чтобы выйти.")
+
+            while True:
+                try:
+                    raw_amount = input("👉 Введи ставку (Enter = дефолт, 'stop' чтобы выйти): ").strip()
+                except EOFError:
+                    raw_amount = "stop"
+
+                if raw_amount.lower() in {"stop", "q", "quit", "exit"}:
+                    print("⏹ Выход из режима ставок.")
+                    break
+
+                try:
+                    raw_times = input("👉 Сколько раз кликнуть (по умолчанию 1): ").strip()
+                except EOFError:
+                    raw_times = ""
+                times = int(raw_times) if raw_times.isdigit() else 1
+
+                try:
+                    raw_spacing = input("👉 Пауза между кликами в секундах (по умолчанию 0.5): ").strip()
+                except EOFError:
+                    raw_spacing = ""
+                spacing = float(raw_spacing) if raw_spacing.replace(".", "", 1).isdigit() else 0.5
+
+                if raw_amount:
+                    print(f"⚡️ Ставлю {raw_amount}, кликов={times}, пауза={spacing}")
+                    await bot.bid_current_lot(amount=raw_amount, times=times, spacing_sec=spacing)
+                else:
+                    print(f"⚡️ Ставлю дефолтную ставку, кликов={times}, пауза={spacing}")
+                    await bot.bid_current_lot(times=times, spacing_sec=spacing)
+
+
 
     finally:
         await bot.close()
