@@ -1050,8 +1050,6 @@ async def main():
                     print(f"⚡️ Ставлю дефолтную ставку, кликов={times}, пауза={spacing}")
                     await bot.bid_current_lot(times=times, spacing_sec=spacing)
 
-
-
     finally:
         await bot.close()
 

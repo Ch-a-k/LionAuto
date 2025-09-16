@@ -1,5 +1,4 @@
 import io
-import logging
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
 from uuid import uuid4
@@ -9,12 +8,12 @@ from app.services.store.s3 import s3_service
 from PIL import Image, ImageFilter, ImageStat
 import imghdr
 import os
-import re
 from loguru import logger
 from PIL.ExifTags import TAGS
 from PyPDF2 import PdfReader
 import clamd
 from app.core.config import settings
+from app.api.dependencies import get_current_user
 
 router = APIRouter(prefix="/documents", tags=["Documents"])
 
@@ -95,12 +94,6 @@ def check_image_exif(file: UploadFile):
                     detail="Image contains embedded cryptographic data."
                 )
 
-
-def get_current_user():
-    # В реальном приложении здесь была бы аутентификация
-    user = User()
-    user.id = "test-user"
-    return user
 
 def validate_file_size(file: UploadFile, max_size_mb: int = 5):
     """Проверка размера файла"""

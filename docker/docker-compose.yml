@@ -42,15 +42,20 @@ services:
   redis:
     image: redis:7-alpine
     container_name: la_redis
-    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    # запускаем по конфигу, где отключены команды репликации
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
     restart: always
     healthcheck:
+      # если включён пароль, добавь: redis-cli -a "$REDIS_PASSWORD" ping
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
     volumes:
+      - ../redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
       - redis_data:/data
+    # ПОРТЫ НЕ ПУБЛИКУЕМ (ничего в "ports" не добавляем)
+
 
   zookeeper:
     image: confluentinc/cp-zookeeper:7.4.0
@@ -156,11 +161,11 @@ services:
     volumes:
       - ./:/app
     ports:
-      - "8000:8000"
+      - "89:8000"
     command: ["poetry", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     user: "1000:1000"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:89/health"]
       interval: 30s
       timeout: 10s
       retries: 3
