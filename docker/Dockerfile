@@ -23,6 +23,8 @@ ENV PYTHONUNBUFFERED=1
 ENV PYTHONBREAKPOINT=ipdb.set_trace
 ENV PATH="$HOME/.local/bin:$PATH"
 ENV PORT=8000
+# Куда складывать браузеры Playwright (кеш слоем образа)
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # Установка Poetry
 USER celeryuser
@@ -41,6 +43,22 @@ RUN poetry config virtualenvs.create false && poetry install --no-root --only ma
 
 # Копируем весь код проекта
 COPY --chown=celeryuser:celeryuser . .
+
+# >>> УСТАНОВКА БРАУЗЕРОВ ДЛЯ PLAYWRIGHT / PATCHRIGHT <<<
+# Нужен root для install-deps (apt установки), после — вернёмся к celeryuser
+USER root
+# 1) системные зависимости браузеров
+RUN python -m playwright install-deps
+# 2) скачивание браузеров (chromium по умолчанию; убери аргумент, если нужны все)
+RUN python -m playwright install chromium
+# 3) если используешь patchright (форк), подтяни его артефакты
+# (команда завершится успешно даже если patchright не установлен в окружении)
+RUN bash -lc 'command -v patchright >/dev/null 2>&1 && patchright install || true'
+# права на каталог с браузерами
+RUN mkdir -p /ms-playwright && chown -R celeryuser:celeryuser /ms-playwright && chmod -R 0755 /ms-playwright
+
+# Возвращаемся под приложного пользователя
+USER celeryuser
 
 # Открываем порт (для backend сервиса)
 EXPOSE 8000
