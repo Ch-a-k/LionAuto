@@ -63,6 +63,25 @@ class Settings(BaseSettings):
     # Encryption
     AUCTION_ENCRYPTION_KEY: str
 
+    #Contabo s3 storage
+    S3_CONTABO_ENDPOINT: str
+    S3_CONTABO_ACCESS_KEY: str
+    S3_CONTABO_SECRET_KEY: str
+    S3_CONTABO_BUCKET: str
+    S3_CONTABO_REGION: str
+    S3_CONTABO_ADDRESSING_STYLE: str
+    CONTABO_S3_PUBLIC_URL: str
+
+    #Default User
+    PASSWORD: str
+    EMAIL: str
+
+    #Copart simple user
+    COPART_USER: str
+    COPART_PASS: str
+    HEADLESS: bool = True
+    COPART_AUTOSTART: bool = True
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

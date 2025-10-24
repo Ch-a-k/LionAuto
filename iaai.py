@@ -7,11 +7,12 @@ import math
 import platform
 from datetime import datetime, timezone
 from typing import Optional, Any, Dict, Callable, Awaitable
+from urllib.parse import urljoin
 
 import aiosqlite
 from patchright.async_api import async_playwright, TimeoutError as PatchrightTimeoutError, Page, Locator
 
-
+BASE_URL = "https://www.iaai.com"
 # =========================
 # Хранилище сессий (SQLite)
 # =========================
@@ -901,8 +902,81 @@ class IAAIBot:
         await human_pause(0.4, 0.9)
         await self._maybe_handle_modals()
 
+    def _normalize_url(self, href: str) -> str:
+        from urllib.parse import urljoin
+        return urljoin(BASE_URL, href.strip())
+
+    def _parse_sales_href(self, href: str) -> dict:
+        """
+        Ожидаемый формат: /SalesList/{site}~{country}/{MMDDYYYY}
+        Пример: /SalesList/660~US/10062025
+        Возвращает словарь с разобранными полями + ISO дату.
+        """
+        out = {"raw_href": href, "site": None, "country": None, "date_mmddyyyy": None, "date_iso": None}
+        try:
+            parts = href.strip("/").split("/")
+            # parts[0] == "SalesList", parts[1] == "660~US", parts[2] == "10062025"
+            if len(parts) >= 3 and parts[0].lower() == "saleslist":
+                site_country = parts[1]
+                date_str = parts[2]
+                if "~" in site_country:
+                    site, country = site_country.split("~", 1)
+                    out["site"] = site
+                    out["country"] = country
+                # Парсим дату MMDDYYYY
+                if len(date_str) == 8:
+                    out["date_mmddyyyy"] = date_str
+                    dt = datetime.strptime(date_str, "%m%d%Y")
+                    out["date_iso"] = dt.date().isoformat()
+        except Exception:
+            pass
+        return out
+
+    async def collect_sale_list_links(self) -> list[dict]:
+        """
+        Собирает все ссылки "View Sale List" (или любые /SalesList/...) с календаря.
+        Возвращает список словарей: {text, href, href_abs, kind, site, country, date_mmddyyyy, date_iso}
+        """
+        links = []
+
+        # 1) Явная кнопка "View Sale List"
+        loc_view = self.page.locator("a:has-text('View Sale List')")
+        # 2) Любые /SalesList/... на всякий случай (если текст отличается)
+        loc_sales = self.page.locator("a[href^='/SalesList/']")
+
+        # Объединяем обе выборки (Playwright не умеет .union, поэтому обрабатываем по очереди)
+        for loc in (loc_view, loc_sales):
+            count = await loc.count()
+            for i in range(count):
+                a = loc.nth(i)
+                href = (await a.get_attribute("href")) or ""
+                text = (await a.text_content()) or ""
+                if not href.startswith("/SalesList/"):
+                    # фильтр, чтобы не цеплять лишнее
+                    continue
+
+                parsed = self._parse_sales_href(href)
+                item = {
+                    "text": text.strip() or "View Sale List",
+                    "href": href,
+                    "href_abs": self._normalize_url(href),
+                    "kind": "sale_list",  # пометим тип
+                    **parsed,
+                }
+                links.append(item)
+
+        # Дедуп по href
+        seen = set()
+        uniq = []
+        for it in links:
+            if it["href"] in seen:
+                continue
+            seen.add(it["href"])
+            uniq.append(it)
+        return uniq
+
     async def go_live_auctions_calendar(self) -> list[dict]:
-        """Открывает /LiveAuctionsCalendar, ждёт якоря и собирает все <a class='link heading-7'>."""
+        """Открывает /LiveAuctionsCalendar, ждёт якоря и собирает: <a.link.heading-7> + /SalesList/..."""
         target_url = "https://www.iaai.com/LiveAuctionsCalendar"
         if self.verbose:
             print(f"📅 Opening Live Auctions Calendar: {target_url}")
@@ -922,7 +996,7 @@ class IAAIBot:
         await human_pause(0.4, 0.9)
         await self._maybe_handle_modals()
 
-        # Пытаемся дождаться характерных элементов страницы (не критично, но полезно)
+        # Необязательные "якоря" для уверенности, что страница прогрузилась
         anchors = [
             "h1:has-text('Live Auctions Calendar')",
             "text=Live Auctions Calendar",
@@ -938,8 +1012,36 @@ class IAAIBot:
             except Exception:
                 pass
 
-        # В ЛЮБОМ СЛУЧАЕ собираем ссылки
-        return await self.collect_link_heading7()
+        # Собираем прежние <a.link.heading-7>
+        link_heading7_items = await self.collect_link_heading7()
+        # Присвоим им тип для единообразия
+        for it in link_heading7_items:
+            it.setdefault("kind", "calendar_link")
+            if "href" in it and not it.get("href_abs"):
+                it["href_abs"] = self._normalize_url(it["href"])
+
+        # Плюс новые /SalesList/... ссылки
+        sale_list_items = await self.collect_sale_list_links()
+
+        # Объединяем и дедуплицируем по абсолютному href
+        combined = link_heading7_items + sale_list_items
+        seen_abs = set()
+        result = []
+        for it in combined:
+            key = it.get("href_abs") or it.get("href")
+            if not key:
+                continue
+            if key in seen_abs:
+                continue
+            seen_abs.add(key)
+            result.append(it)
+
+        if self.verbose:
+            print(f"🔗 Collected {len(result)} links "
+                f"(calendar_link={sum(1 for x in result if x['kind']=='calendar_link')}, "
+                f"sale_list={sum(1 for x in result if x['kind']=='sale_list')})")
+
+        return result
 
 
     async def _auto_scroll(self, max_steps: int = 20, step_px: int = 1200, pause=(0.2, 0.5)):
@@ -1038,14 +1140,375 @@ class IAAIBot:
         if self.verbose:
             print("⚠️  Не удалось открыть Watchlist (проверь URL/селекторы)")
         return False
+    
+    async def join_first_auction_and_continue(self, saleslist_url: str = "https://www.iaai.com/SalesList/660~US/10062025") -> None:
+        """
+        Открывает страницу SalesList, переходит в самый первый лот,
+        нажимает Join Auction → Continue, ждёт загрузки UI аукциона
+        и ОСТАЁТСЯ на странице, пока пользователь не введёт 'q' в консоль.
+        """
+        import sys
+        page: Page = self.page
+        context = self.context
+
+        self._log("➡️  Open SalesList")
+        await page.goto(saleslist_url, wait_until="domcontentloaded")
+
+        # Закрыть возможные cookie/consent
+        for sel in [
+            'button:has-text("Accept All")',
+            'button:has-text("Accept")',
+            'button:has-text("Got it")',
+            'text=/Accept (All)? Cookies/i',
+        ]:
+            try:
+                await page.locator(sel).first.click(timeout=1500)
+                self._log(f"✅ Dismissed consent via {sel}")
+                break
+            except Exception:
+                pass
+
+        # Найти первый элемент списка
+        first_item = None
+        candidate_selectors = [
+            'main a[href*="/Auction"]',
+            'main a[href*="/Sales"]',
+            'section a[href*="/Auction"]',
+            'section a[href*="/Sales"]',
+            'main a[href]:visible',
+            'section a[href]:visible',
+            'a[href]:visible',
+        ]
+        for sel in candidate_selectors:
+            loc = page.locator(sel).first
+            try:
+                await loc.wait_for(timeout=4000)
+                first_item = loc
+                self._log(f"🧭 First result selector: {sel}")
+                break
+            except Exception:
+                continue
+
+        if not first_item:
+            raise RuntimeError("Не удалось найти первый элемент списка аукционов на странице SalesList")
+
+        try:
+            href = await first_item.get_attribute("href")
+            self._log(f"🔗 Opening first item: {href or '(no href)'}")
+        except Exception:
+            pass
+
+        await first_item.click()
+        await page.wait_for_load_state("domcontentloaded")
+
+        # Кнопка Join Auction
+        self._log("🔎 Looking for Join Auction button")
+        join_sel_candidates = [
+            'a.btn.btn-lg.btn-primary:has-text("Join Auction")',
+            'a.btn.btn-primary:has-text("Join Auction")',
+            'a[href*="AuctionGateway"][target="_new"]',
+            'a[href*="AuctionGateway"]',
+            'text=/Join Auction/i',
+        ]
+        join_link = None
+        for sel in join_sel_candidates:
+            loc = page.locator(sel).first
+            try:
+                await loc.wait_for(timeout=6000)
+                join_link = loc
+                self._log(f"✅ Join selector: {sel}")
+                break
+            except Exception:
+                continue
+
+        if not join_link:
+            raise RuntimeError("Кнопка 'Join Auction' не найдена на странице аукциона")
+
+        # Клик -> новая вкладка (fallback: та же вкладка)
+        self._log("🖱️ Clicking Join Auction (expecting new tab)")
+        new_page = None
+        try:
+            new_page_awaitable = context.wait_for_event("page")
+            await join_link.click(force=True)
+            try:
+                new_page = await asyncio.wait_for(new_page_awaitable, timeout=15)
+            except asyncio.TimeoutError:
+                new_page = page  # открылось в той же вкладке
+        except Exception:
+            new_page = page
+
+        await new_page.wait_for_load_state("domcontentloaded")
+
+        # Кнопка Continue на новой/текущей вкладке
+        self._log("🔎 Looking for Continue button on auction gateway")
+        continue_sel_candidates = [
+            'button.btn.btn-md.btn-primary.d-flex.mt-20:has-text("Continue")',
+            'button:has-text("Continue")',
+            'text=/Continue/i',
+        ]
+        cont_btn = None
+        for sel in continue_sel_candidates:
+            loc = new_page.locator(sel).first
+            try:
+                await loc.wait_for(timeout=12000)
+                cont_btn = loc
+                self._log(f"✅ Continue selector: {sel}")
+                break
+            except Exception:
+                continue
+
+        if not cont_btn:
+            raise RuntimeError("Кнопка 'Continue' не найдена на странице Auction Gateway")
+
+        await cont_btn.click()
+
+        # ⏳ Ждём загрузку шаблона аукциона
+        self._log("⏳ Waiting for auction UI to load…")
+        auction_ready_selectors = [
+            "div.AuctionContainer.event__item[data-templatesize='Large'] .event__header .event__name",
+            "div.AuctionContainer.event__item[data-size='large'] .event__header .event__name",
+            ".connection.is-connected",
+            "div.run-list-container#runList-",
+            "div.list-view__row.Action[data-actionname='ViewDetail']",
+            "div.card.event--large",
+        ]
+        try:
+            await new_page.wait_for_load_state("networkidle", timeout=30000)
+        except Exception:
+            pass
+
+        loaded = False
+        last_err = None
+        deadline = asyncio.get_event_loop().time() + 45
+        while asyncio.get_event_loop().time() < deadline and not loaded:
+            for sel in auction_ready_selectors:
+                try:
+                    await new_page.locator(sel).first.wait_for(state="visible", timeout=3000)
+                    self._log(f"✅ Auction UI detected via: {sel}")
+                    loaded = True
+                    break
+                except Exception as e:
+                    last_err = e
+            if not loaded:
+                await asyncio.sleep(0.8)
+
+        if not loaded:
+            raise RuntimeError(f"Не дождался загрузки интерфейса аукциона (время вышло). Последняя ошибка: {last_err}")
+
+        self._log('🎉 Auction UI loaded — staying on the page. Type "q" then Enter to quit.')
+
+        # 🧷 ДЕРЖИМ СТРАНИЦУ ОТКРЫТОЙ, ПОКА ПОЛЬЗОВАТЕЛЬ НЕ ВВЕДЁТ "q"
+        loop = asyncio.get_running_loop()
+
+        async def _readline() -> str:
+            # без блокировки event loop
+            return await loop.run_in_executor(None, sys.stdin.readline)
+
+        while True:
+            # если страницу закрыли руками — выходим
+            try:
+                if new_page.is_closed():
+                    self._log("ℹ️ Page closed by user/browser.")
+                    break
+            except Exception:
+                break
+
+            try:
+                line = await asyncio.wait_for(_readline(), timeout=2.0)
+                if line and line.strip().lower() == "q":
+                    self._log('👋 "q" received — exiting join_first_auction_and_continue()')
+                    break
+            except asyncio.TimeoutError:
+                # просто продолжаем жить на странице
+                continue
+            except Exception:
+                # на всякий случай — не падаем
+                await asyncio.sleep(0.5)
+                continue
+
+        # Функция завершается ТОЛЬКО после "q" или закрытия страницы.
+        return
+
+    async def join_auction_and_listen(self, saleslist_url: str) -> None:
+        """
+        1) Открывает страницу SalesList.
+        2) Находит и нажимает: <a class="btn btn-lg btn-primary btn-block">Join Auction</a>
+        3) В новой вкладке нажимает: <button class="btn btn-md btn-primary d-flex mt-20">Continue</button>
+        4) Ждёт загрузки интерфейса аукциона (AuctionContainer + js-BidActions).
+        5) Остаётся на странице и слушает консоль:
+            - 'b' + Enter  → клик по основной кнопке ставки (#js-place-bid)
+            - 'j' + Enter  → клик по Jump (#js-btn-jumpbid)
+            - 'a' + Enter  → клик по Auto (#js-btn-autobid)
+            - 'q' + Enter  → выйти из функции (закрывать браузер НЕ будем)
+        """
+        import sys
+        page: Page = self.page
+        context = self.context
+
+        # 1) SalesList
+        self._log(f"➡️  Open SalesList: {saleslist_url}")
+        await page.goto(saleslist_url, wait_until="domcontentloaded")
+
+        # простые попытки закрыть баннеры/куки
+        for sel in (
+            'button:has-text("Accept All")',
+            'button:has-text("Accept")',
+            'button:has-text("Got it")',
+            'text=/Accept (All)? Cookies/i',
+        ):
+            try:
+                await page.locator(sel).first.click(timeout=1200)
+                break
+            except Exception:
+                pass
+
+        # 2) Join Auction (конкретный якорь по классу)
+        self._log("🔎 Looking for 'Join Auction' anchor (btn-lg btn-primary btn-block)")
+        join_anchor = None
+        for sel in (
+            'a.btn.btn-lg.btn-primary.btn-block:has-text("Join Auction")',
+            'a[href*="/AuctionGateway"][target="_new"]',
+            'a[href*="/AuctionGateway"] >> text=Join Auction',
+        ):
+            loc = page.locator(sel).first
+            try:
+                await loc.wait_for(timeout=8000)
+                join_anchor = loc
+                self._log(f"✅ Found Join via: {sel}")
+                break
+            except Exception:
+                continue
+
+        if not join_anchor:
+            raise RuntimeError("Не удалось найти кнопку 'Join Auction' на странице SalesList/аукциона.")
+
+        # клик → ожидаем новую страницу (или ту же вкладку как fallback)
+        self._log("🖱️ Clicking Join Auction (new tab expected)")
+        new_page = None
+        try:
+            wait_new = context.wait_for_event("page")
+            await join_anchor.click(force=True)
+            try:
+                new_page = await asyncio.wait_for(wait_new, timeout=15)
+            except asyncio.TimeoutError:
+                new_page = page  # открылось в той же вкладке
+        except Exception:
+            new_page = page
+
+        await new_page.wait_for_load_state("domcontentloaded")
+
+        # 3) Continue на новой вкладке
+        self._log("🔎 Looking for 'Continue' button on AuctionGateway")
+        cont_btn = None
+        for sel in (
+            'button.btn.btn-md.btn-primary.d-flex.mt-20:has-text("Continue")',
+            'button:has-text("Continue")',
+            'text=/^\\s*Continue\\s*$/i',
+        ):
+            loc = new_page.locator(sel).first
+            try:
+                await loc.wait_for(timeout=15000)
+                cont_btn = loc
+                self._log(f"✅ Found Continue via: {sel}")
+                break
+            except Exception:
+                continue
+
+        if not cont_btn:
+            raise RuntimeError("Кнопка 'Continue' не найдена на AuctionGateway.")
+
+        await cont_btn.click()
+        try:
+            await new_page.wait_for_load_state("networkidle", timeout=30000)
+        except Exception:
+            pass
+
+        # 4) Ждём загрузку крупного блока аукциона + зоны ставок
+        self._log("⏳ Waiting for Auction UI (AuctionContainer + js-BidActions)…")
+        auction_ok = False
+        selectors_to_confirm = [
+            "div.AuctionContainer.event__item[data-templatesize='Large']",
+            "div.AuctionContainer.event__item .event__header .event__name",
+            "div.js-BidActions",
+            "#js-place-bid",
+        ]
+        deadline = asyncio.get_running_loop().time() + 60
+        last_err = None
+        while asyncio.get_running_loop().time() < deadline and not auction_ok:
+            try:
+                # ждём по очереди ключевые элементы
+                for s in selectors_to_confirm:
+                    await new_page.locator(s).first.wait_for(state="visible", timeout=5000)
+                auction_ok = True
+                break
+            except Exception as e:
+                last_err = e
+                await asyncio.sleep(0.8)
+
+        if not auction_ok:
+            raise RuntimeError(f"Интерфейс аукциона не загрузился вовремя: {last_err}")
+
+        self._log('🎉 Auction UI ready. Console controls: [b]=Bid  [j]=Jump  [a]=Auto  [q]=Quit')
+
+        # 5) Консольное управление: клики по кнопкам
+        loop = asyncio.get_running_loop()
+
+        async def _readline() -> str:
+            return await loop.run_in_executor(None, sys.stdin.readline)
+
+        async def _try_click(sel: str, name: str):
+            try:
+                btn = new_page.locator(sel).first
+                await btn.wait_for(state="visible", timeout=3000)
+                await btn.click()
+                self._log(f"✅ Clicked {name}")
+            except Exception as e:
+                self._log(f"⚠️ Cannot click {name}: {e}")
+
+        while True:
+            # если вкладку закрыли вручную — выходим
+            try:
+                if new_page.is_closed():
+                    self._log("ℹ️ Auction page closed.")
+                    break
+            except Exception:
+                break
+
+            # не блокируем event loop — ждём строку из stdin
+            try:
+                line = await asyncio.wait_for(_readline(), timeout=2.0)
+            except asyncio.TimeoutError:
+                continue
+            except Exception:
+                await asyncio.sleep(0.5)
+                continue
+
+            if not line:
+                continue
+
+            cmd = line.strip().lower()
+            if cmd == "q":
+                self._log('👋 "q" received — exit control loop.')
+                break
+            elif cmd == "b":
+                await _try_click("#js-place-bid", "BID (#js-place-bid)")
+            elif cmd == "j":
+                await _try_click("#js-btn-jumpbid", "JUMP (#js-btn-jumpbid)")
+            elif cmd == "a":
+                await _try_click("#js-btn-autobid", "AUTO (#js-btn-autobid)")
+            else:
+                self._log('ℹ️ Unknown command. Use: b (Bid), j (Jump), a (Auto), q (Quit)')
+
+        # НЕ закрываем браузер/страницу здесь — просто выходим из функции.
+        return
 
 
+    def _log(self, msg: str):
+        if getattr(self, "verbose", False):
+            print(msg)
 
 # ======================
 # Пример использования
-# ======================
-# ======================
-# Обновлённый main
 # ======================
 async def main():
     USERNAME = os.getenv("IAAI_USER", "").strip()
@@ -1074,7 +1537,6 @@ async def main():
     await bot.start(storage_state=storage)
 
     try:
-        # Если storage пустой — сразу форсим login(), иначе пробуем оживить сессию
         if not storage:
             if not await bot.login():
                 print("⛔ Авторизация не удалась (первичный вход)")
@@ -1082,25 +1544,27 @@ async def main():
             await store.save_storage_state(USERNAME, await bot.storage_state())
             if bot.verbose:
                 print("💾 storage_state сохранён в SQLite (первичный вход)")
-        # else:
-        #     if not await bot.ensure_session(store):
-        #         print("⛔ Авторизация не удалась (ensure_session)")
-        #         return
+        else:
+            if not await bot.ensure_session(store):
+                print("⛔ Авторизация не удалась (ensure_session)")
+                return
 
-        print("✅ Сессия валидна. Выполняю дальнейшие действия в кабинете…")
+        print("✅ Сессия валидна. Выполняю дальнейшие действия…")
 
-        # Дальнейшие действия
-        # await bot.go_dashboard()
-        # await bot.go_watchlist()
         links = await bot.go_live_auctions_calendar()
         print(f"✅ Найдено {len(links)} ссылок:")
         for i, item in enumerate(links, 1):
             print(f"{i:02d}. {item['text'] or '(no text)'} -> {item['href']}")
-        # здесь добавлять шаги: поиск, ставки, экспорт и т.п.
+        
+        # Переход → первый элемент → Join Auction → Continue
+        # await bot.join_first_auction_and_continue("https://www.iaai.com/SalesList/660~US/10062025")
+
+        # дальше можно работать уже в аукционе...
+        await bot.join_auction_and_listen("https://www.iaai.com/LiveAuctionsCalendar")
+        # await bot.place_bid(...)
 
     finally:
         await bot.close()
-
 
 
 if __name__ == "__main__":

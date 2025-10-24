@@ -1,11 +1,12 @@
 from app.models import User, Role, Permission
 from app.core.security.pass_hash import get_password_hash
+from app.core.config import settings
 
 class InitService:
     @staticmethod
     async def create_default_user():
-        password = "securepassword123"
-        email = "admin@la.com"
+        password = settings.PASSWORD
+        email = settings.EMAIL
         
         # Проверяем, не существует ли уже пользователь
         if await User.exists(email=email):

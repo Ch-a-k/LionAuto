@@ -12,27 +12,63 @@ router = APIRouter()
 
 MAX_PAGE_SIZE = 50
 
+
 def build_cache_key(**kwargs) -> str:
-    # Фильтруем None и формируем строку ключа
+    """
+    Формирует уникальный ключ для кэша Redis на основе параметров запроса.
+
+    Args:
+        **kwargs: Набор именованных аргументов (фильтры, сортировка и т.д.).
+
+    Returns:
+        str: Уникальный строковый ключ вида 'lots:key=value:key2=value2'.
+    """
     return "lots:" + ":".join(f"{k}={v}" for k, v in kwargs.items() if v is not None)
+
 
 @router.get("/", response_model=List[LotSchema])
 async def list_lots(
-    page: int = Query(1, gt=0),
-    limit: int = Query(10, le=MAX_PAGE_SIZE),
-    min_price: Optional[float] = None,
-    max_price: Optional[float] = None,
-    make: Optional[str] = None,
-    model: Optional[str] = None,
-    year_min: Optional[int] = None,
-    year_max: Optional[int] = None,
-    location: Optional[str] = None,
-    damage_type: Optional[str] = None,
-    status: Optional[str] = None,
-    sort: Optional[str] = Query(None, pattern=r"^(price|end_time|bid_count)_(asc|desc)$"),
-    search: Optional[str] = None,
+    page: int = Query(1, gt=0, description="Номер страницы (начиная с 1)"),
+    limit: int = Query(10, le=MAX_PAGE_SIZE, description="Количество элементов на странице"),
+    min_price: Optional[float] = Query(None, description="Минимальная цена лота"),
+    max_price: Optional[float] = Query(None, description="Максимальная цена лота"),
+    make: Optional[str] = Query(None, description="Марка автомобиля"),
+    model: Optional[str] = Query(None, description="Модель автомобиля"),
+    year_min: Optional[int] = Query(None, description="Минимальный год выпуска"),
+    year_max: Optional[int] = Query(None, description="Максимальный год выпуска"),
+    location: Optional[str] = Query(None, description="Местоположение аукциона"),
+    damage_type: Optional[str] = Query(None, description="Тип повреждения"),
+    status: Optional[str] = Query(None, description="Статус лота (например, 'sold', 'available')"),
+    sort: Optional[str] = Query(
+        None,
+        pattern=r"^(price|end_time|bid_count)_(asc|desc)$",
+        description="Поле и направление сортировки: 'price_asc', 'end_time_desc' и т.д."
+    ),
+    search: Optional[str] = Query(None, description="Полнотекстовый поиск по названию и описанию"),
     redis = Depends(get_redis_client)
 ):
+    """
+    Получает список лотов с фильтрацией, пагинацией, сортировкой и кешированием через Redis.
+
+    Args:
+        page (int): Номер страницы.
+        limit (int): Количество элементов на странице.
+        min_price (float, optional): Минимальная цена.
+        max_price (float, optional): Максимальная цена.
+        make (str, optional): Марка автомобиля.
+        model (str, optional): Модель автомобиля.
+        year_min (int, optional): Минимальный год выпуска.
+        year_max (int, optional): Максимальный год выпуска.
+        location (str, optional): Локация аукциона.
+        damage_type (str, optional): Тип повреждения.
+        status (str, optional): Статус лота.
+        sort (str, optional): Ключ сортировки (например, "price_desc").
+        search (str, optional): Полнотекстовый поиск.
+        redis: Клиент Redis для кеширования.
+
+    Returns:
+        List[LotSchema]: Список лотов, удовлетворяющих фильтрам.
+    """
     offset = (page - 1) * limit
     cache_key = build_cache_key(
         page=page, limit=limit,
@@ -45,7 +81,6 @@ async def list_lots(
 
     cached = await redis.get(cache_key)
     if cached:
-        # cached — строка JSON
         return json.loads(cached)
 
     query = Lot.all()
@@ -56,7 +91,7 @@ async def list_lots(
     if max_price is not None:
         query = query.filter(start_price__lte=max_price)
 
-    # Фильтрация JSON-полей
+    # Фильтрация по JSON-полям
     if make:
         query = query.filter(auction_data__make=make)
     if model:
@@ -98,13 +133,26 @@ async def list_lots(
     lots = await query.offset(offset).limit(limit)
     result = [LotSchema.from_orm(l) for l in lots]
 
-    # Кэшируем ответ
-    await redis.set(cache_key, json.dumps([r.dict() for r in result]), ex=300)  # TTL 5 мин
+    # Кэшируем ответ (TTL — 5 минут)
+    await redis.set(cache_key, json.dumps([r.dict() for r in result]), ex=300)
     return result
 
 
 @router.get("/{lot_id}", response_model=LotSchema)
 async def get_lot(lot_id: UUID, redis = Depends(get_redis_client)):
+    """
+    Получает подробную информацию о конкретном лоте по его UUID.
+
+    Args:
+        lot_id (UUID): Уникальный идентификатор лота.
+        redis: Клиент Redis для кеширования.
+
+    Returns:
+        LotSchema: Объект лота.
+    
+    Raises:
+        HTTPException: Если лот не найден.
+    """
     cache_key = f"lot:{lot_id}"
     cached = await redis.get(cache_key)
     if cached:
@@ -121,6 +169,16 @@ async def get_lot(lot_id: UUID, redis = Depends(get_redis_client)):
 
 @router.get("/by-auction/{auction_type}", response_model=List[LotSchema])
 async def get_lots_by_auction(auction_type: AuctionType, redis = Depends(get_redis_client)):
+    """
+    Возвращает список лотов, отфильтрованных по типу аукциона (например, COPART, IAAI и т.д.).
+
+    Args:
+        auction_type (AuctionType): Тип аукциона (Enum).
+        redis: Клиент Redis для кеширования.
+
+    Returns:
+        List[LotSchema]: Список лотов указанного типа аукциона.
+    """
     cache_key = f"lots:auction_type={auction_type}"
     cached = await redis.get(cache_key)
     if cached:

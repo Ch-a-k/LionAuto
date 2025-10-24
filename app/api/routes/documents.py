@@ -4,7 +4,7 @@ from fastapi.responses import JSONResponse
 from uuid import uuid4
 from typing import Annotated
 from enum import Enum
-from app.services.store.s3 import s3_service
+from app.services.store.s3contabo import s3_service
 from PIL import Image, ImageFilter, ImageStat
 import imghdr
 import os
