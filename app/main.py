@@ -10,7 +10,7 @@ from app.api.routes import (
     user_router, documents_router, customers_router,
     role_router, user_auction_router, lots_router,
     watchlist_router, copart_route, iaai_route, audit_router,
-    bot_session_router
+    bot_session_router, debug_router
 )
 from app.core.database import DatabaseManager
 from app.services.init_service import InitService
@@ -168,6 +168,10 @@ app.include_router(
     dependencies=[Depends(get_current_user)]
 )
 
+app.include_router(
+    debug_router,
+    dependencies=[Depends(get_current_user)]
+)
 
 async def main():
     """ Main function to run FastAPI with multiple workers. """

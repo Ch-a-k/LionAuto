@@ -9,3 +9,4 @@ from .copart_router import router as copart_route
 from .iaai_router import router as iaai_route
 from .audit_logs import router as audit_router
 from .bot_sessions import router as bot_session_router
+from .debug import router as debug_router
