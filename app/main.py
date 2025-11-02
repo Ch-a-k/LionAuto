@@ -152,8 +152,7 @@ app.include_router(
 app.include_router(
     user_router,
     prefix="/user",
-    tags=["User"],
-    dependencies=[Depends(get_current_user)]
+    tags=["User"]
 )
 
 app.include_router(

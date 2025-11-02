@@ -109,7 +109,7 @@ class RefreshTokenRequest(BaseModel):
 
 
 @router.post("/token/refresh", response_model=TokenResponse)
-async def refresh_access_token(data: RefreshTokenRequest = Body(...)):
+async def refresh_access_token(data: RefreshTokenRequest = Body(...), user: User = Depends(get_current_active_user)):
     """
     Обновляет access_token с использованием refresh_token.
 
