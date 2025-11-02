@@ -5,3 +5,8 @@ from .roles import router as role_router
 from .user_auction import router as user_auction_router
 from .lots import router as lots_router
 from .watchlist import router as watchlist_router
+from .copart_router import router as copart_route
+from .iaai_router import router as iaai_route
+from .audit_logs import router as audit_router
+from .bot_sessions import router as bot_session_router
+from .debug import router as debug_router

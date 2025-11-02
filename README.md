@@ -103,3 +103,11 @@ OR
 ```bash
 docker compose --env-file .env -f docker/docker-compose.yml up --build
 ```
+
+## Truncatate logs if dont have disk space
+
+```
+sudo truncate -s 0 /var/log/messages
+sudo truncate -s 0 /var/log/kern.log
+sudo truncate -s 0 /var/log/syslog
+```
