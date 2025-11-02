@@ -9,9 +9,9 @@ from app.core.config import settings
 from app.api.routes import (
     user_router, documents_router, customers_router,
     role_router, user_auction_router, lots_router,
-    watchlist_router
+    watchlist_router, copart_route, iaai_route, audit_router,
+    bot_session_router
 )
-from app.api.routes.copart_router import router as copart_router
 from app.core.database import DatabaseManager
 from app.services.init_service import InitService
 from app.api.dependencies import get_current_user
@@ -48,28 +48,28 @@ async def lifespan(app: FastAPI):
     await loop.run_in_executor(None, admin.create_topics)
 
     # --- CopartController: создаём и, при желании, автозапускаем ---
-    app.state.copart_controller = CopartController(
-        username=settings.COPART_USER,
-        password=settings.COPART_PASS,
-        headless=settings.HEADLESS,
-        session_db="sessions.db",
-    )
-    if settings.COPART_AUTOSTART:
-        try:
-            await app.state.copart_controller.start()
-        except Exception as e:
-            logger.exception(f"Copart autostart failed: {e}")
+    # app.state.copart_controller = CopartController(
+    #     username=settings.COPART_USER,
+    #     password=settings.COPART_PASS,
+    #     headless=settings.HEADLESS,
+    #     session_db="sessions.db",
+    # )
+    # if settings.COPART_AUTOSTART:
+    #     try:
+    #         await app.state.copart_controller.start()
+    #     except Exception as e:
+    #         logger.exception(f"Copart autostart failed: {e}")
 
     try:
         yield
     finally:
         logger.info("Shutting down...")
-        try:
-            # Корректно останавливаем бота
-            if getattr(app.state, "copart_controller", None):
-                await app.state.copart_controller.stop()
-        except Exception:
-            logger.exception("Error stopping Copart controller")
+        # try:
+        #     # Корректно останавливаем бота
+        #     if getattr(app.state, "copart_controller", None):
+        #         await app.state.copart_controller.stop()
+        # except Exception:
+        #     logger.exception("Error stopping Copart controller")
         app.state.kafka_producer.flush()
         await db.close()
 
@@ -93,9 +93,6 @@ app.add_middleware(
 async def health_check():
     return {"status": "healthy"}
 
-# ... твои include_router ...
-app.include_router(copart_router, prefix="/copart", tags=["Copart Bot"])
-# Защищенные роуты с простой JWT проверкой
 app.include_router(
     documents_router,
     prefix="/kyc",
@@ -137,6 +134,40 @@ app.include_router(
     tags=["Watchlist"],
     dependencies=[Depends(get_current_user)]
 )
+
+app.include_router(
+    iaai_route,
+    prefix="/iaai",
+    tags=["IAAI"],
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    copart_route,
+    prefix="/copart",
+    tags=["Copart"],
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    user_router,
+    prefix="/user",
+    tags=["User"],
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    audit_router,
+    prefix="/audit",
+    tags=["Audit Logs"],
+    dependencies=[Depends(get_current_user)]
+)
+
+app.include_router(
+    bot_session_router,
+    dependencies=[Depends(get_current_user)]
+)
+
 
 async def main():
     """ Main function to run FastAPI with multiple workers. """
