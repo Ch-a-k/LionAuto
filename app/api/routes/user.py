@@ -99,7 +99,7 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
         "access_token": access_token,
         "refresh_token": refresh_token_str,
         "token_type": "JWT",
-        "user_id": user.id
+        "user_id": str(user.id)
     }
 
 
@@ -150,7 +150,7 @@ async def refresh_access_token(data: RefreshTokenRequest = Body(...), user: User
         "access_token": access_token,
         "refresh_token": data.refresh_token,
         "token_type": "JWT",
-        "user_id": user.id
+        "user_id": str(user.id)
     }
 
 
