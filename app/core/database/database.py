@@ -13,11 +13,11 @@ class DatabaseManager:
         await Tortoise.generate_schemas(safe=True)
         logger.info("✅ Database schema initialized")
 
-        # Создаем GIN индекс для полнотекстового поиска на lots
+        # Создаем GIN индекс для полнотекстового поиска на lot
         conn = Tortoise.get_connection("default")
         await conn.execute_query("""
             CREATE INDEX IF NOT EXISTS lot_search_idx
-            ON lots USING GIN (to_tsvector('simple', title || ' ' || coalesce(description, '')));
+            ON lot USING GIN (to_tsvector('simple', coalesce(location, '') || ' ' || coalesce(state, '')));
         """)
         logger.info("✅ GIN index lot_search_idx created or already exists")
 

@@ -8,9 +8,12 @@ from loguru import logger
 from app.core.config import settings
 from app.api.routes import (
     user_router, documents_router, customers_router,
-    role_router, user_auction_router, lots_router,
+    role_router, user_auction_router,
     watchlist_router, copart_route, iaai_route, audit_router,
-    bot_session_router, debug_router
+    bot_session_router, debug_router,
+    lot_router, trans_router, lead_router, 
+    nhts_router, task_router,
+    additional_router, admin_router, calculator_router
 )
 from app.core.database import DatabaseManager
 from app.services.init_service import InitService
@@ -18,8 +21,13 @@ from app.api.dependencies import get_current_user
 from app.services.kafka.producer import KafkaProducer
 import clamd
 from app.services.kafka.admin import KafkaAdmin
+from app.database import (create_admin_user, create_default_roles, 
+                            create_additional_information)
+from app.services.cache import init_main_cache
+from app.core.cache import init_cache
 
 from app.services.copart_controller import CopartController
+import multiprocessing
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -39,6 +47,7 @@ async def lifespan(app: FastAPI):
 
     db = DatabaseManager()
     await db.init()
+    logger.info(f"Count threads {multiprocessing.cpu_count()} and workes to celery {multiprocessing.cpu_count() + 1}")
     await InitService.init_roles_permissions()
     await InitService.create_default_user()
 
@@ -59,7 +68,15 @@ async def lifespan(app: FastAPI):
     #         await app.state.copart_controller.start()
     #     except Exception as e:
     #         logger.exception(f"Copart autostart failed: {e}")
-
+    try:
+        await create_additional_information()
+    except Exception as e:
+        logger.exception(f"create_additional_information autostart failed: {e}")
+    init_cache()
+    # ⏱️ Запуск фоновой задачи на обновление кэша
+    asyncio.create_task(init_main_cache())
+    await create_default_roles()
+    await create_admin_user()
     try:
         yield
     finally:
@@ -122,13 +139,6 @@ app.include_router(
 )
 
 app.include_router(
-    lots_router,
-    prefix="/lots",
-    tags=["Lots"],
-    dependencies=[Depends(get_current_user)]
-)
-
-app.include_router(
     watchlist_router,
     prefix="/watchlist",
     tags=["Watchlist"],
@@ -171,6 +181,15 @@ app.include_router(
     debug_router,
     dependencies=[Depends(get_current_user)]
 )
+
+app.include_router(lot_router, prefix="/lot", tags=["Lot"], dependencies=[Depends(get_current_user)])
+app.include_router(trans_router, prefix="/translation", tags=["Translation"], dependencies=[Depends(get_current_user)])
+app.include_router(lead_router, prefix="/lead", tags=["Lead"], dependencies=[Depends(get_current_user)])
+app.include_router(nhts_router, prefix="/nhts", tags=["NHTS"], dependencies=[Depends(get_current_user)])
+app.include_router(task_router, prefix="/task", tags=["Task"], dependencies=[Depends(get_current_user)])
+app.include_router(additional_router, prefix="/additional", tags=["Additional"], dependencies=[Depends(get_current_user)])
+app.include_router(admin_router, prefix="/admin", tags=["Admin"], dependencies=[Depends(get_current_user)])
+app.include_router(calculator_router, prefix="/calculator", tags=["Calculator"])
 
 async def main():
     """ Main function to run FastAPI with multiple workers. """

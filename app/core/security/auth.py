@@ -17,7 +17,7 @@ async def create_access_token(user_id: int, scopes: list[str] = ["user"]) -> dic
     
     payload = {
         "user_id": user.id,
-        "sub": user.username,
+        "sub": user.email,
         "scopes": scopes,
         "exp": expire
     }

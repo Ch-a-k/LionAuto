@@ -926,159 +926,159 @@ class CopartBot:
 # ======================
 # Пример использования (рефакторинг: честные логи, без лишнего)
 # ======================
-# async def main():
-#     import os
+async def main():
+    import os
 
-#     # ENV:
-#     # COPART_USER, COPART_PASS, HEADLESS=1
-#     # COPART_LIVE_TITLE="CT - Hartford" (опционально: подсказка по площадке)
-#     # COPART_TRACK_SECS=15 (0 чтобы выключить)
-#     # COPART_DO_BID=1 (0 чтобы выключить)
-#     USERNAME = os.getenv("COPART_USER", "755554")
-#     PASSWORD = os.getenv("COPART_PASS", "newpass0408")
-#     HEADLESS       = os.getenv("HEADLESS", "1") == "0"
-#     LIVE_TITLE_HINT= (os.getenv("COPART_LIVE_TITLE") or "").strip()
-#     TRACK_SECONDS  = int(os.getenv("COPART_TRACK_SECS", "120") or "0")
-#     DO_BID         = os.getenv("COPART_DO_BID", "0") == "1"
+    # ENV:
+    # COPART_USER, COPART_PASS, HEADLESS=1
+    # COPART_LIVE_TITLE="CT - Hartford" (опционально: подсказка по площадке)
+    # COPART_TRACK_SECS=15 (0 чтобы выключить)
+    # COPART_DO_BID=1 (0 чтобы выключить)
+    USERNAME = os.getenv("COPART_USER", "755554")
+    PASSWORD = os.getenv("COPART_PASS", "newpass0408")
+    HEADLESS       = os.getenv("HEADLESS", "1") == "0"
+    LIVE_TITLE_HINT= (os.getenv("COPART_LIVE_TITLE") or "").strip()
+    TRACK_SECONDS  = int(os.getenv("COPART_TRACK_SECS", "120") or "0")
+    DO_BID         = os.getenv("COPART_DO_BID", "0") == "1"
 
     
-#     if not USERNAME or not PASSWORD:
-#         print("⛔ Укажи COPART_USER и COPART_PASS")
-#         return
+    if not USERNAME or not PASSWORD:
+        print("⛔ Укажи COPART_USER и COPART_PASS")
+        return
 
-#     store = SessionStore("sessions.db")
-#     await store.init()
-#     bot = CopartBot(username=USERNAME, password=PASSWORD, headless=HEADLESS)
-#     await bot.start(storage_state=await store.get_storage_state(USERNAME))
+    store = SessionStore("sessions.db")
+    await store.init()
+    bot = CopartBot(username=USERNAME, password=PASSWORD, headless=HEADLESS)
+    await bot.start(storage_state=await store.get_storage_state(USERNAME))
 
-#     try:
-#         if not await bot.ensure_session(store):
-#             print("⛔ Авторизация не удалась")
-#             return
-#         print("✅ Сессия валидна")
+    try:
+        if not await bot.ensure_session(store):
+            print("⛔ Авторизация не удалась")
+            return
+        print("✅ Сессия валидна")
 
-#         # 1) Календарь → собрать только live-модалки по иконке + "(Live)"
-#         await bot.page.goto("https://www.copart.com/auctionCalendar", wait_until="domcontentloaded")
-#         await bot._maybe_accept_cookies()
-#         try:
-#             await bot.page.wait_for_selector("a[ng-click*='openModal']", timeout=20000)
-#         except:
-#             await bot.save_page_html_deep(prefix="no_ng_click_headless")
+        # 1) Календарь → собрать только live-модалки по иконке + "(Live)"
+        await bot.page.goto("https://www.copart.com/auctionCalendar", wait_until="domcontentloaded")
+        await bot._maybe_accept_cookies()
+        try:
+            await bot.page.wait_for_selector("a[ng-click*='openModal']", timeout=20000)
+        except:
+            await bot.save_page_html_deep(prefix="no_ng_click_headless")
 
-#         live_titles = await bot.page.evaluate(r"""
-#         () => {
-#           const text = (el) => (el ? (el.textContent || "").replace(/\s+/g," ").trim() : "");
-#           const rows = Array.from(document.querySelectorAll("i.fa-li-live"))
-#               .map(icon => icon.closest("tr, li, div, section"))
-#               .filter(Boolean);
-#           const out = [];
-#           for (const row of rows) {
-#             const a = row.querySelector("a[ng-click*='openModal']");
-#             const t = text(a);
-#             if (a && /\(Live\)/i.test(t)) out.push(t);
-#           }
-#           return Array.from(new Set(out)); // уникальные
-#         }
-#         """)
+        live_titles = await bot.page.evaluate(r"""
+        () => {
+          const text = (el) => (el ? (el.textContent || "").replace(/\s+/g," ").trim() : "");
+          const rows = Array.from(document.querySelectorAll("i.fa-li-live"))
+              .map(icon => icon.closest("tr, li, div, section"))
+              .filter(Boolean);
+          const out = [];
+          for (const row of rows) {
+            const a = row.querySelector("a[ng-click*='openModal']");
+            const t = text(a);
+            if (a && /\(Live\)/i.test(t)) out.push(t);
+          }
+          return Array.from(new Set(out)); // уникальные
+        }
+        """)
 
-#         if not live_titles:
-#             print("⛔ Живых модалок (…(Live)) не найдено")
-#             return
+        if not live_titles:
+            print("⛔ Живых модалок (…(Live)) не найдено")
+            return
 
-#         # 2) Приоритезируем по подсказке, если задана
-#         if LIVE_TITLE_HINT:
-#             live_titles.sort(key=lambda t: 0 if LIVE_TITLE_HINT in t.lower() else 1)
+        # 2) Приоритезируем по подсказке, если задана
+        if LIVE_TITLE_HINT:
+            live_titles.sort(key=lambda t: 0 if LIVE_TITLE_HINT in t.lower() else 1)
 
-#         # 3) Пытаемся join по каждой модалке до появления bidAmount (в любом фрейме)
-#         joined = False
-#         opened_label = ""
-#         for title in live_titles[:12]:
-#             print(f"→ Join по модалке: '{title}'")
-#             ok_click = await bot.join_live_from_calendar_by_title(title)
-#             if not ok_click:
-#                 print("  ↪️ Не удалось нажать Join, следующая модалка…")
-#                 await bot.page.goto("https://www.copart.com/auctionCalendar", wait_until="domcontentloaded")
-#                 continue
+        # 3) Пытаемся join по каждой модалке до появления bidAmount (в любом фрейме)
+        joined = False
+        opened_label = ""
+        for title in live_titles[:12]:
+            print(f"→ Join по модалке: '{title}'")
+            ok_click = await bot.join_live_from_calendar_by_title(title)
+            if not ok_click:
+                print("  ↪️ Не удалось нажать Join, следующая модалка…")
+                await bot.page.goto("https://www.copart.com/auctionCalendar", wait_until="domcontentloaded")
+                continue
 
-#             # Ждём реальный live UI по инпуту bidAmount (в любом фрейме).
-#             ok_ready = await bot.wait_for_live_dashboard(timeout_ms=45000)
-#             if not ok_ready:
-#                 try:
-#                     await bot.save_page_html_deep(prefix="timeout_wait_bidAmount")
-#                 except Exception:
-#                     pass
-#                 print("  ↪️ bidAmount не появился, следующая модалка…")
-#                 await bot.page.goto("https://www.copart.com/auctionCalendar", wait_until="domcontentloaded")
-#                 continue
+            # Ждём реальный live UI по инпуту bidAmount (в любом фрейме).
+            ok_ready = await bot.wait_for_live_dashboard(timeout_ms=45000)
+            if not ok_ready:
+                try:
+                    await bot.save_page_html_deep(prefix="timeout_wait_bidAmount")
+                except Exception:
+                    pass
+                print("  ↪️ bidAmount не появился, следующая модалка…")
+                await bot.page.goto("https://www.copart.com/auctionCalendar", wait_until="domcontentloaded")
+                continue
 
-#             # Считаем, что мы в live того же названия, по которому кликали.
-#             opened_label = title
-#             joined = True
-#             break
+            # Считаем, что мы в live того же названия, по которому кликали.
+            opened_label = title
+            joined = True
+            break
 
-#         if not joined:
-#             print("⛔ Не удалось присоединиться к живым модалкам")
-#             return
+        if not joined:
+            print("⛔ Не удалось присоединиться к живым модалкам")
+            return
 
-#         print(f"✅ На live: {opened_label}")
+        print(f"✅ На live: {opened_label}")
 
-#         # 4) (опционально) показать id виджета, если на странице его реально видно
-#         try:
-#             widget = await bot.wait_and_get_live_widget(timeout_ms=15000)
-#             wid = await widget.evaluate("el => el.id")
-#             print(f"   Виджет: {wid}")
-#         except Exception:
-#             pass
+        # 4) (опционально) показать id виджета, если на странице его реально видно
+        try:
+            widget = await bot.wait_and_get_live_widget(timeout_ms=15000)
+            wid = await widget.evaluate("el => el.id")
+            print(f"   Виджет: {wid}")
+        except Exception:
+            pass
         
 
-#         # 5) Логировать bidAmount каждую секунду N секунд из того фрейма, где он найден
-#         if TRACK_SECONDS > 0:
-#             try:
-#                 task = asyncio.create_task(bot.stream_bid_amounts(seconds=TRACK_SECONDS))
-#                 print(f"▶️ Запустил фоновое логирование bidAmount на {TRACK_SECONDS} сек.")
-#             except Exception as e:
-#                 print(f"⚠️ Не удалось запустить логирование bidAmount: {e}")
+        # 5) Логировать bidAmount каждую секунду N секунд из того фрейма, где он найден
+        if TRACK_SECONDS > 0:
+            try:
+                task = asyncio.create_task(bot.stream_bid_amounts(seconds=TRACK_SECONDS))
+                print(f"▶️ Запустил фоновое логирование bidAmount на {TRACK_SECONDS} сек.")
+            except Exception as e:
+                print(f"⚠️ Не удалось запустить логирование bidAmount: {e}")
 
 
-#         DO_BID = True
-#         # 6) (опционально) кликнуть Bid
-#         if DO_BID:
-#             print("🟢 Режим ручных ставок активирован. Вводи 'stop' или 'q', чтобы выйти.")
+        DO_BID = True
+        # 6) (опционально) кликнуть Bid
+        if DO_BID:
+            print("🟢 Режим ручных ставок активирован. Вводи 'stop' или 'q', чтобы выйти.")
 
-#             while True:
-#                 try:
-#                     raw_amount = input("👉 Введи ставку (Enter = дефолт, 'stop' чтобы выйти): ").strip()
-#                 except EOFError:
-#                     raw_amount = "stop"
+            while True:
+                try:
+                    raw_amount = input("👉 Введи ставку (Enter = дефолт, 'stop' чтобы выйти): ").strip()
+                except EOFError:
+                    raw_amount = "stop"
 
-#                 if raw_amount.lower() in {"stop", "q", "quit", "exit"}:
-#                     print("⏹ Выход из режима ставок.")
-#                     break
+                if raw_amount.lower() in {"stop", "q", "quit", "exit"}:
+                    print("⏹ Выход из режима ставок.")
+                    break
 
-#                 try:
-#                     raw_times = input("👉 Сколько раз кликнуть (по умолчанию 1): ").strip()
-#                 except EOFError:
-#                     raw_times = ""
-#                 times = int(raw_times) if raw_times.isdigit() else 1
+                try:
+                    raw_times = input("👉 Сколько раз кликнуть (по умолчанию 1): ").strip()
+                except EOFError:
+                    raw_times = ""
+                times = int(raw_times) if raw_times.isdigit() else 1
 
-#                 try:
-#                     raw_spacing = input("👉 Пауза между кликами в секундах (по умолчанию 0.5): ").strip()
-#                 except EOFError:
-#                     raw_spacing = ""
-#                 spacing = float(raw_spacing) if raw_spacing.replace(".", "", 1).isdigit() else 0.5
+                try:
+                    raw_spacing = input("👉 Пауза между кликами в секундах (по умолчанию 0.5): ").strip()
+                except EOFError:
+                    raw_spacing = ""
+                spacing = float(raw_spacing) if raw_spacing.replace(".", "", 1).isdigit() else 0.5
 
-#                 if raw_amount:
-#                     print(f"⚡️ Ставлю {raw_amount}, кликов={times}, пауза={spacing}")
-#                     await bot.bid_current_lot(amount=raw_amount, times=times, spacing_sec=spacing)
-#                 else:
-#                     print(f"⚡️ Ставлю дефолтную ставку, кликов={times}, пауза={spacing}")
-#                     await bot.bid_current_lot(times=times, spacing_sec=spacing)
+                if raw_amount:
+                    print(f"⚡️ Ставлю {raw_amount}, кликов={times}, пауза={spacing}")
+                    await bot.bid_current_lot(amount=raw_amount, times=times, spacing_sec=spacing)
+                else:
+                    print(f"⚡️ Ставлю дефолтную ставку, кликов={times}, пауза={spacing}")
+                    await bot.bid_current_lot(times=times, spacing_sec=spacing)
 
-#     finally:
-#         await bot.close()
+    finally:
+        await bot.close()
 
 
-# if __name__ == "__main__":
-#     asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
 
 # # _hrs or _ful its diferrence between hd or not hd photo, _thb is thubnail photo

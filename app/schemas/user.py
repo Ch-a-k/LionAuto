@@ -1,36 +1,80 @@
-from pydantic import BaseModel, ConfigDict, Field
+from uuid import UUID
 from typing import Literal
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    computed_field,   # <-- ВАЖНО: импортируем
+)
+
 from app.enums.auction_type import AuctionType
+from typing import Optional
+from enum import Enum
 
-
+# --------- USERS ----------
 class UserBase(BaseModel):
     email: str
 
-class UserCreate(UserBase):
-    password: str
 
 class UserResponse(UserBase):
-    id: int
-    is_verified: bool
+    id: UUID
+    # эти поля Pydantic вытянет из ORM-модели User
+    is_active: bool
+    kyc_access: bool
+
     model_config = ConfigDict(from_attributes=True)
+
+    # UUID -> str
+    @field_serializer("id")
+    def serialize_id(self, v: UUID, _info):
+        return str(v)
+
+    # вычисляемое поле, которое реально уйдет в JSON
+    @computed_field  # type: ignore[misc]
+    @property
+    def is_verified(self) -> bool:
+        # выбери свою бизнес-логику; сейчас маппинг на kyc_access
+        return bool(getattr(self, "kyc_access", False))
+
 
 class TokenResponse(BaseModel):
     access_token: str = Field(..., description="JWT access token")
     token_type: Literal["JWT"] = Field(..., description="Type of the token")
-    user_id: int = Field(..., description="ID of the authenticated user")
+    user_id: str = Field(..., description="ID of the authenticated user")
 
+
+# --------- AUCTION ACCOUNTS ----------
 class UserAuctionAccountCreate(BaseModel):
     auction_type: AuctionType
     username: str = Field(..., min_length=1)
     password: str = Field(..., min_length=8)
 
+
 class UserAuctionAccountUpdate(BaseModel):
     username: str | None = None
     password: str | None = None
+
 
 class UserAuctionAccountResponse(BaseModel):
     id: int
     auction_type: AuctionType
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
+
+class TokenData(BaseModel):
+    email: Optional[str] = None
+
+class Permissions(str, Enum):
+    FULL_ACCESS = "full_access"
+    DASHBOARD = "dashboard"
+    AUTO_LOTS = "auto_lots"
+    TRANSFERS = "transfers"
+    EXTRA_SETTINGS = "extra_settings"
+    USERS = "users"
+    TRANSACTIONS = "transactions"
+    SETTINGS = "settings"
+    CALCULATOR = "calculator"
+    CALCULATOR_SETTINGS = "calculator_settings"
+    LEADS = "leads"
