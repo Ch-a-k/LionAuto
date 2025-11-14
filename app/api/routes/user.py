@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, Body
+from fastapi import APIRouter, Depends, HTTPException, Body, status
 from fastapi.security import OAuth2PasswordRequestForm
-from app.models import RefreshToken, User
+from app.models import RefreshToken, User, Role
+from app.models.user import UserRole 
 from app.schemas.user import UserResponse, TokenResponse
 from app.api.dependencies import (
     get_current_user,
@@ -11,14 +12,61 @@ from app.api.dependencies import (
     create_access_token
 )
 from app.services.kyc.verification_service import VerificationService
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field
 from loguru import logger
 from datetime import datetime, timedelta
 import secrets
+from app.core.security.security import get_password_hash
 
 router = APIRouter()
 
 REFRESH_TOKEN_EXPIRE_DAYS = 7
+
+
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str = Field(..., min_length=8)
+
+
+@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def register_user(payload: UserCreate):
+    """
+    Регистрирует нового пользователя.
+
+    - Проверяет, что email ещё не используется.
+    - Хэширует пароль.
+    - Создаёт пользователя.
+    - Назначает роль basic_trader (если такая роль есть в БД).
+    """
+    # Проверяем, что email свободен
+    existing = await User.get_or_none(email=payload.email)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered",
+        )
+
+    # Хэшируем пароль
+    password_hash = get_password_hash(payload.password)
+
+    # Создаём пользователя
+    user = await User.create(
+        email=payload.email,
+        password_hash=password_hash,
+        # is_active=True по умолчанию
+    )
+
+    # Назначаем роль basic_trader, если она существует
+    try:
+        basic_role = await Role.get_or_none(name=UserRole.basic_trader.value)
+        if basic_role:
+            await user.roles.add(basic_role)
+    except Exception as e:
+        logger.error(f"Failed to assign default role to user {user.email}: {e}")
+
+    # Возвращаем пользователя (UserResponse преобразует ORM-модель)
+    return user
 
 
 @router.get("/{user_id}/verification-status", response_model=UserResponse)

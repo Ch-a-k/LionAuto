@@ -82,6 +82,12 @@ class Settings(BaseSettings):
     HEADLESS: bool = True
     COPART_AUTOSTART: bool = True
 
+    first_superuser_email: str
+    first_superuser_password: str
+
+    CACHE_KEY: str = "lot_refine_automobile"
+    CACHE_TTL: int = 1800
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @property

@@ -4,7 +4,7 @@ from uuid import UUID
 from app.models.user_watchlist import UserWatchlist
 from app.schemas.watchlist import WatchlistEntrySchema
 from app.models.lot import Lot
-from app.schemas.lot import LotSchema
+from app.schemas.lot import VehicleModel
 from app.api.dependencies import get_current_user
 from tortoise.exceptions import IntegrityError
 
@@ -69,7 +69,7 @@ async def remove_from_watchlist(lot_id: UUID, user=Depends(get_current_user)):
     return
 
 
-@router.get("/lots/watchlist", response_model=List[LotSchema])
+@router.get("/lots/watchlist", response_model=List[VehicleModel])
 async def get_watchlist(user=Depends(get_current_user)):
     """
     Возвращает список всех лотов, добавленных пользователем в watchlist.
@@ -87,4 +87,4 @@ async def get_watchlist(user=Depends(get_current_user)):
     entries = await UserWatchlist.filter(user_id=user.id).all()
     lot_ids = [entry.lot_id for entry in entries]
     lots = await Lot.filter(id__in=lot_ids)
-    return [LotSchema.from_orm(lot) for lot in lots]
+    return [VehicleModel.from_orm(lot) for lot in lots]

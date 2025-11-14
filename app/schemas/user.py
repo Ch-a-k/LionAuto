@@ -10,7 +10,8 @@ from pydantic import (
 )
 
 from app.enums.auction_type import AuctionType
-
+from typing import Optional
+from enum import Enum
 
 # --------- USERS ----------
 class UserBase(BaseModel):
@@ -61,3 +62,19 @@ class UserAuctionAccountResponse(BaseModel):
     auction_type: AuctionType
 
     model_config = ConfigDict(from_attributes=True)
+
+class TokenData(BaseModel):
+    email: Optional[str] = None
+
+class Permissions(str, Enum):
+    FULL_ACCESS = "full_access"
+    DASHBOARD = "dashboard"
+    AUTO_LOTS = "auto_lots"
+    TRANSFERS = "transfers"
+    EXTRA_SETTINGS = "extra_settings"
+    USERS = "users"
+    TRANSACTIONS = "transactions"
+    SETTINGS = "settings"
+    CALCULATOR = "calculator"
+    CALCULATOR_SETTINGS = "calculator_settings"
+    LEADS = "leads"
