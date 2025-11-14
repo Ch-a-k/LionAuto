@@ -25,9 +25,11 @@ from app.database import (create_admin_user, create_default_roles,
                             create_additional_information)
 from app.services.cache import init_main_cache
 from app.core.cache import init_cache
+from fastapi.staticfiles import StaticFiles
 
 from app.services.copart_controller import CopartController
 import multiprocessing
+from pathlib import Path
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -90,12 +92,20 @@ async def lifespan(app: FastAPI):
         app.state.kafka_producer.flush()
         await db.close()
 
+BASE_DIR = Path(__file__).parent
+STATIC_DIR = BASE_DIR / "static"
+
+STATIC_DIR.mkdir(exist_ok=True, parents=True)
+
 app = FastAPI(
     title=settings.app_name,
     version=settings.version,
     lifespan=lifespan,
     debug=settings.debug
 )
+
+# Mount static files with absolute path
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 app.add_middleware(
     CORSMiddleware,
