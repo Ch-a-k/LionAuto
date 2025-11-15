@@ -19,7 +19,7 @@ RUN mkdir -p /tmp/.X11-unix && \
     chown root:root /tmp/.X11-unix && \
     chmod 1777 /tmp/.X11-unix
 
-# --- Права на python директории ---
+# --- Права на python директории (чтобы celeryuser мог ставить пакеты/обновлять) ---
 RUN chown -R celeryuser:celeryuser /usr/local/lib/python3.12 \
  && chown -R celeryuser:celeryuser /usr/local/include/python3.12 \
  && chown -R celeryuser:celeryuser /usr/local/bin
@@ -49,21 +49,32 @@ RUN curl -sSL https://install.python-poetry.org | python3 - && poetry --version
 
 # --- Установка зависимостей проекта ---
 WORKDIR $PROJECT_ROOT
+
+# сначала только зависимости
 COPY --chown=celeryuser:celeryuser pyproject.toml poetry.lock ./
 RUN poetry config virtualenvs.create false && poetry install --no-root --only main
 
-# --- Копируем код ---
+# затем весь код
 COPY --chown=celeryuser:celeryuser . .
 
-# --- Установка Playwright deps и браузеров (нужен root) ---
+# --- Дальнейшие штуки, требующие root (Playwright, права, статические директории) ---
 USER root
+
+# Установка Playwright deps и браузера Chromium
 RUN python -m playwright install-deps && \
     python -m playwright install chromium
-# (Опционально) если используешь patchright — подтянуть артефакты
+
+# (Опционально) если используешь patchright — подтянуть артефакты, иначе тихо пропустить
 RUN bash -lc 'command -v patchright >/dev/null 2>&1 && patchright install || true'
 
-# Права на каталог для браузеров
-RUN mkdir -p /ms-playwright && chown -R celeryuser:celeryuser /ms-playwright && chmod -R 0755 /ms-playwright
+# Каталог под браузеры
+RUN mkdir -p /ms-playwright && \
+    chown -R celeryuser:celeryuser /ms-playwright && \
+    chmod -R 0755 /ms-playwright
+
+# ✅ Гарантируем наличие статики и vehicle_icons + права для celeryuser
+RUN mkdir -p $PROJECT_ROOT/app/static/vehicle_icons && \
+    chown -R celeryuser:celeryuser $PROJECT_ROOT
 
 # --- entrypoint: Xvfb + VNC + запуск приложения ---
 COPY docker/entrypoint.sh /usr/local/bin/entrypoint.sh
@@ -71,6 +82,7 @@ RUN chmod +x /usr/local/bin/entrypoint.sh
 
 # --- Возвращаемся под приложного пользователя ---
 USER celeryuser
+WORKDIR $PROJECT_ROOT
 
 # --- Порты: API + VNC + CDP ---
 EXPOSE 8000 5900 9222

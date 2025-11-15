@@ -1,7 +1,7 @@
 from typing import Literal, Dict
 from pydantic import BaseModel
 
-TransLiteral = Literal["ru", "en", "md", "ua", "kz", "pl"]
+TransLiteral = Literal["ru", "en", "md", "ua", "kz", "pl", "ge", "de"]
 
 
 class TranslationUpdateRequest(BaseModel):

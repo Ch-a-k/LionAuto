@@ -114,7 +114,7 @@ async def get_refine_filters(
     # Условие кэширования
     if (
     is_historical in [False, True] and
-    language in ["ru", "en", "md", "ua", "kz", "pl"] and
+    language in ["ru", "en", "md", "ua", "kz", "pl", "ge", "de"] and
     normalize_filter_value(vehicle_type_slug) == ["automobile"] and
     limit == 18 and
     offset in [0,1,2,3,4,5,6,7] and
