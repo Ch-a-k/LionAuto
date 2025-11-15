@@ -76,7 +76,7 @@ async def lifespan(app: FastAPI):
         logger.exception(f"create_additional_information autostart failed: {e}")
     init_cache()
     # ⏱️ Запуск фоновой задачи на обновление кэша
-    asyncio.create_task(init_main_cache())
+    # asyncio.create_task(init_main_cache())
     await create_default_roles()
     await create_admin_user()
     try:
