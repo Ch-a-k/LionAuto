@@ -8,10 +8,26 @@ set -euo pipefail
 : "${XVFB_H:=768}"
 : "${XVFB_D:=24}"
 
-# --- гарантия существования сокетной папки X (нормальная версия с правами уже создана в Dockerfile) ---
+# --- номер дисплея без двоеточия (:99 -> 99) ---
+DISPLAY_NUM="${DISPLAY#:}"
+
+# --- чистим возможные старые lock-и и сокеты для Xvfb ---
+LOCK_FILE="/tmp/.X${DISPLAY_NUM}-lock"
+SOCKET_FILE="/tmp/.X11-unix/X${DISPLAY_NUM}"
+
+if [ -f "$LOCK_FILE" ]; then
+  echo "Found stale X lock file ${LOCK_FILE}, removing..."
+  rm -f "$LOCK_FILE" || true
+fi
+
+if [ -S "$SOCKET_FILE" ]; then
+  echo "Found stale X socket ${SOCKET_FILE}, removing..."
+  rm -f "$SOCKET_FILE" || true
+fi
+
+# --- гарантия существования сокетной папки X ---
 if [ ! -d /tmp/.X11-unix ]; then
   mkdir -p /tmp/.X11-unix || true
-  # если мы не root — chmod может не сработать, это ок (в Dockerfile уже правильно создано)
   chmod 1777 /tmp/.X11-unix >/dev/null 2>&1 || true
 fi
 
@@ -31,7 +47,7 @@ sleep 0.8
 # --- простой оконный менеджер, чтобы окна корректно себя вели ---
 openbox >/tmp/openbox.log 2>&1 &
 
-# --- VNC-сервер (локальный; наружу у тебя уже проброшен 127.0.0.1:5900 в compose) ---
+# --- VNC-сервер ---
 echo "Starting x11vnc on port ${VNC_PORT}"
 x11vnc -display "$DISPLAY" -forever -shared -rfbport "${VNC_PORT}" -localhost -bg "${VNC_AUTH[@]}" -o /tmp/x11vnc.log || true
 
