@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     CORS_ALLOWED_ORIGINS: List[str] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+        "https://fadder.vercel.app",
+        "http://fadder.vercel.app"
+
     ]
     
 
