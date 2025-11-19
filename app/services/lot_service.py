@@ -1971,7 +1971,7 @@ async def get_filtered_lots(
     async with in_transaction():
         model_type = None
         key = f"all_active_count"
-        logger.debug(f"KEY: {key}")
+        logger.debug(f"KEY: {key} and Vehicle Type Slug: {vehicle_type_slug}")
         if "automobile" in vehicle_type_slug:
             if cache:
                 if "iaai" or "copart" in base_site and "automobile" in vehicle_type_slug:
@@ -1983,7 +1983,10 @@ async def get_filtered_lots(
                     cached_result = json.loads(cached_result)
                     model_type = await get_lot_type_by_offset_and_limit(limit=limit, offset=offset, cached_result=cached_result)
                     logger.debug(model_type)
-            logger.debug(f'{VALIDATOR_MODEL[f'{model_type}']}')
+            try:
+                logger.debug(f'{VALIDATOR_MODEL[f'{model_type}']}')
+            except Exception as e:
+                model_type = VALIDATOR_MODEL["Lot1"] if not is_historical else HistoricalLot
             if sort_by == "bid":
                 model_type = "Lot6"
             query = HistoricalLot.all() if is_historical else VALIDATOR_MODEL[f'{model_type}'].all().filter(auction_date__gte=date.today())
@@ -2130,7 +2133,7 @@ async def get_filtered_lots(
                 auction_date_to=auction_date_to
             )
         ]
-
+        logger.debug('Filtered applies')
         # Wait for all filter tasks and exists check
         exists, *filtered_queries = await asyncio.gather(exists_task, *filter_tasks)
         query_to_cylinders, query_to_risk_index, query_to_engine_size, query_to_year = filtered_queries
@@ -2399,7 +2402,7 @@ async def get_filtered_lots(
         stats["body_type"] = [vt for vt in stats["body_type"] if vt["slug"] in vt_list]
     result = {
         "lots": results_lots,
-        "count": 150000,
+        "count": count,
         "stats": stats
     }
     key = f"{full_url}"

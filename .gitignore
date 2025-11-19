@@ -210,3 +210,4 @@ __marimo__/
 *.json
 *.png
 *.html
+sync_factum_to_lots.py

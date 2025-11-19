@@ -201,9 +201,10 @@ def process_batch_task(self, lots_data):
             except Exception as e:
                 logger.error(f"Ошибка обработки лота {lot_data.get('vin')}: {e}")
                 results.append({
-                    'vin': lot_data.get('vin'),
-                    'status': 'failed',
-                    'error': str(e)
+                    'vin': lot_data['vin'],
+                    'status': 'success',
+                    'lot_id': lot['lot_id'] if isinstance(lot, dict) else lot.id,
+                    'id': lot['id'] if isinstance(lot, dict) else lot.id
                 })
         
         return {
