@@ -1,7 +1,7 @@
 # app/main.py (фрагменты)
 import asyncio
 import uvicorn
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from loguru import logger
@@ -24,12 +24,23 @@ from app.services.kafka.admin import KafkaAdmin
 from app.database import (create_admin_user, create_default_roles, 
                             create_additional_information)
 from app.services.cache import init_main_cache
+from fastapi.security import APIKeyHeader
 from app.core.cache import init_cache
 from fastapi.staticfiles import StaticFiles
 
 from app.services.copart_controller import CopartController
 import multiprocessing
 from pathlib import Path
+
+api_key_header = APIKeyHeader(name="Authorization")
+
+async def validate_api_key(api_key: str = Depends(api_key_header)):
+    if api_key != settings.secret_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid API Key",
+        )
+    return api_key
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -192,12 +203,12 @@ app.include_router(
     dependencies=[Depends(get_current_user)]
 )
 
-app.include_router(lot_router, prefix="/lot", tags=["Lot"], dependencies=[Depends(get_current_user)])
+app.include_router(lot_router, prefix="/lot", tags=["Lot"], dependencies=[Depends(validate_api_key)])
 app.include_router(trans_router, prefix="/translation", tags=["Translation"], dependencies=[Depends(get_current_user)])
 app.include_router(lead_router, prefix="/lead", tags=["Lead"], dependencies=[Depends(get_current_user)])
-app.include_router(nhts_router, prefix="/nhts", tags=["NHTS"], dependencies=[Depends(get_current_user)])
+app.include_router(nhts_router, prefix="/nhts", tags=["NHTS"], dependencies=[Depends(validate_api_key)])
 app.include_router(task_router, prefix="/task", tags=["Task"], dependencies=[Depends(get_current_user)])
-app.include_router(additional_router, prefix="/additional", tags=["Additional"], dependencies=[Depends(get_current_user)])
+app.include_router(additional_router, prefix="/additional", tags=["Additional"], dependencies=[Depends(validate_api_key)])
 app.include_router(admin_router, prefix="/admin", tags=["Admin"], dependencies=[Depends(get_current_user)])
 app.include_router(calculator_router, prefix="/calculator", tags=["Calculator"])
 
