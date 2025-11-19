@@ -1974,24 +1974,43 @@ async def get_filtered_lots(
         logger.debug(f"KEY: {key} and Vehicle Type Slug: {vehicle_type_slug}")
         if "automobile" in vehicle_type_slug:
             if cache:
-                if "iaai" or "copart" in base_site and "automobile" in vehicle_type_slug:
+                # тут ещё логическая ошибка, но это отдельно
+                if base_site and ("iaai" in base_site or "copart" in base_site) and "automobile" in vehicle_type_slug:
                     key = f"all_auction_active_count"
                 cached_result = await cache.get(key)
-                
+
                 logger.debug(f"RESULT CACHE COUNT IN REFINED FUNCTION: {cached_result}")
                 if cached_result:
                     cached_result = json.loads(cached_result)
-                    model_type = await get_lot_type_by_offset_and_limit(limit=limit, offset=offset, cached_result=cached_result)
-                    logger.debug(model_type)
+                    model_type = await get_lot_type_by_offset_and_limit(
+                        limit=limit,
+                        offset=offset,
+                        cached_result=cached_result,
+                    )
+                    logger.debug(f"model_type from cache: {model_type}")
+
+            # безопасная проверка + дефолт
             try:
-                logger.debug(f'{VALIDATOR_MODEL[f'{model_type}']}')
+                if not model_type or model_type not in VALIDATOR_MODEL:
+                    model_type = "Lot1"
+                logger.debug(f"Using model_type={model_type}, cls={VALIDATOR_MODEL[model_type]}")
             except Exception as e:
-                model_type = VALIDATOR_MODEL["Lot1"] if not is_historical else HistoricalLot
+                # ВАЖНО: здесь тоже возвращаем СТРОКУ, а не класс
+                logger.error(f"Error with model_type {model_type}: {e}")
+                model_type = "Lot1"
+
             if sort_by == "bid":
                 model_type = "Lot6"
-            query = HistoricalLot.all() if is_historical else VALIDATOR_MODEL[f'{model_type}'].all().filter(auction_date__gte=date.today())
+
+            if is_historical:
+                query = HistoricalLot.all()
+            else:
+                query = VALIDATOR_MODEL[model_type].all().filter(
+                    auction_date__gte=date.today()
+                )
         else:
             query = LotOtherVehicleHistorical.all() if is_historical else LotOtherVehicle.all()
+
         exists_task = query.exists()
         # Start all filter queries concurrently
         filter_tasks = [

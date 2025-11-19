@@ -35,7 +35,16 @@ from pathlib import Path
 api_key_header = APIKeyHeader(name="Authorization")
 
 async def validate_api_key(api_key: str = Depends(api_key_header)):
-    if api_key != settings.secret_key or api_key != f"Baerer {settings.secret_key}":
+    # Разрешаем:
+    # 1) просто `Authorization: <secret>`
+    # 2) или `Authorization: Baerer <secret>` (как делает Swagger)
+    allowed_keys = {
+        settings.secret_key,
+        f"Baerer {settings.secret_key}",
+        f"Bearer {settings.secret_key}",
+    }
+
+    if api_key not in allowed_keys:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid API Key",
