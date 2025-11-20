@@ -2200,42 +2200,15 @@ async def get_filtered_lots(
             "is_historical": is_historical
         }.items() if v is not None}
         if "automobile" in vehicle_type_slug:
-            if is_historical:
-                # исторические авто
-                min_od, max_od = await HistoricalLot.historical_get_min_max_odometer(**filters)
-                total_count = await HistoricalLot.historical_count(**filters)
-                results_lots = await HistoricalLot.historical_query_with_limit_offset(
-                    limit=limit,
-                    offset=offset,
-                    **filters,
-                )
-            else:
-                # активные авто по шартам Lot1..Lot7
-                min_od, max_od = await Lot.get_min_max_odometer_across_shards(**filters)
-                total_count = await Lot.count_across_shards(**filters)
-                results_lots = await Lot.query_across_shards_with_limit_offset(
-                    limit=limit,
-                    offset=offset,
-                    **filters,
-                )
+            min_od, max_od = await Lot.get_min_max_odometer_across_shards(**filters) if not is_historical else await HistoricalLot.historical_get_min_max_odometer(**filters)
+            total_count = await HistoricalLot.historical_count(**filters) if is_historical else await Lot.count_across_shards(**filters)
+            results_lots = await Lot.query_across_shards_with_limit_offset(limit=limit, offset=offset, **filters) if not is_historical else await HistoricalLot.historical_query_with_limit_offset(limit=limit, offset=offset, **filters)
+            results_lots = [await lot_to_dict(language, lot) for lot in results_lots]
         else:
-            if is_historical:
-                min_od, max_od = await LotOtherVehicleHistorical.historical_other_vehicle_get_min_max_odometer(**filters)
-                total_count = await LotOtherVehicleHistorical.historical_other_vehicle_count(**filters)
-                results_lots = await LotOtherVehicleHistorical.historical_other_vehicle_query_with_limit_offset(
-                    limit=limit,
-                    offset=offset,
-                    **filters,
-                )
-            else:
-                min_od, max_od = await LotOtherVehicle.other_vehicle_get_min_max_odometer(**filters)
-                total_count = await LotOtherVehicle.other_vehicle_count(**filters)
-                results_lots = await LotOtherVehicle.other_vehicle_query_with_limit_offset(
-                    limit=limit,
-                    offset=offset,
-                    **filters,
-                )
-
+            min_od, max_od = await LotOtherVehicle.other_vehicle_get_min_max_odometer(**filters) if not is_historical else await LotOtherVehicleHistorical.historical_other_vehicle_get_min_max_odometer(**filters)
+            total_count = await LotOtherVehicleHistorical.historical_other_vehicle_count(**filters) if is_historical else await LotOtherVehicle.other_vehicle_count(**filters)
+            results_lots = await LotOtherVehicle.other_vehicle_query_with_limit_offset(limit=limit, offset=offset, **filters) if not is_historical else await LotOtherVehicleHistorical.historical_other_vehicle_query_with_limit_offset(limit=limit, offset=offset, **filters)
+            results_lots = [await lot_to_dict(language, lot) for lot in results_lots]
 
         query = await apply_filters(
             query=query,
