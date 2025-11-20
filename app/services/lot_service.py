@@ -2349,22 +2349,11 @@ async def get_filtered_lots(
     # query = HistoricalLot.all() if is_historical else VALIDATOR_MODEL[f'{model_type}'].all() if model_type else Lot1.all()
     vehicle_types = await VehicleType.all()
     auto_stat = []
-    
+    total_count = await query.count()
     for vt in vehicle_types:
         if vt.slug == "other":
             continue  # исключаем 'other'
         
-        count = (
-            await Lot1.filter(vehicle_type=vt).count() +
-            await Lot2.filter(vehicle_type=vt).count() +
-            await Lot3.filter(vehicle_type=vt).count() +
-            await Lot4.filter(vehicle_type=vt).count() +
-            await Lot5.filter(vehicle_type=vt).count() +
-            await Lot6.filter(vehicle_type=vt).count() +
-            await Lot7.filter(vehicle_type=vt).count()
-        )
-        logger.debug(f"DEBUG COUNTS LOT: {count}")
-
         item = {
             "id": vt.id,
             "name": vt.name,
@@ -2372,7 +2361,7 @@ async def get_filtered_lots(
             "icon_path": vt.icon_path,
             "icon_active": vt.icon_active,
             "icon_disable": vt.icon_disable,
-            "counter": count
+            "counter": total_count
         }
 
         translated_value = await get_translation(
@@ -2422,7 +2411,7 @@ async def get_filtered_lots(
         stats["body_type"] = [vt for vt in stats["body_type"] if vt["slug"] in vt_list]
     result = {
         "lots": results_lots,
-        "count": count,
+        "count": total_count,
         "stats": stats
     }
     key = f"{full_url}"
