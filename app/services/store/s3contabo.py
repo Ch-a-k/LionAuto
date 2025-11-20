@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 
 import anyio
 import boto3
@@ -17,12 +17,14 @@ class S3Service:
     Позволяет загружать любые бинарные файлы (фото/видео/PDF/др. документы).
 
     Ожидаемые переменные окружения / settings:
-      - S3_ENDPOINT=https://eu2.contabostorage.com
-      - S3_ACCESS_KEY=...
-      - S3_SECRET_KEY=...
-      - S3_BUCKET=buildermedia
-      - S3_REGION=eu2 (опционально)
-      - S3_ADDRESSING_STYLE=path (по умолчанию 'path' для совместимости)
+      - S3_CONTABO_ENDPOINT=https://usc1.contabostorage.com
+      - S3_CONTABO_ACCESS_KEY=...
+      - S3_CONTABO_SECRET_KEY=...
+      - S3_CONTABO_BUCKET=fadder
+      - S3_CONTABO_REGION=usc1 (опционально)
+      - S3_CONTABO_ADDRESSING_STYLE=path
+      - CONTABO_S3_PUBLIC_BASE_URL=https://usc1.contabostorage.com/<storageName>:fadder
+        (опционально, чтобы строить публичные ссылки как в панели Contabo)
     """
 
     def __init__(
@@ -34,12 +36,18 @@ class S3Service:
         region_name: Optional[str] = None,
         addressing_style: str = "path",
         signature_version: str = "s3v4",
+        public_base_url: Optional[str] = None,
     ) -> None:
         self.endpoint_url = endpoint_url.rstrip("/")
         self.bucket = bucket
-        self.public_base_url = f"{self.endpoint_url}/{self.bucket}"
 
-        # botocore Config: принудительно v4 и path-style для лучшей совместимости с Contabo
+        # если передали кастомный public_base_url (как у Contabo c "storageName:bucket") — используем его
+        if public_base_url:
+            self.public_base_url = public_base_url.rstrip("/")
+        else:
+            # дефолтный вариант: endpoint/bucket
+            self.public_base_url = f"{self.endpoint_url}/{self.bucket}"
+
         cfg = Config(
             signature_version=signature_version,
             s3={"addressing_style": addressing_style},
@@ -57,7 +65,7 @@ class S3Service:
 
     async def upload_fileobj(
         self,
-        fileobj,
+        fileobj: Any,
         key: str,
         content_type: str = "application/octet-stream",
         public_read: bool = False,
@@ -73,7 +81,7 @@ class S3Service:
         if metadata:
             extra_args["Metadata"] = metadata
 
-        def _do_upload():
+        def _do_upload() -> None:
             fileobj.seek(0)
             self.client.upload_fileobj(
                 Fileobj=fileobj,
@@ -83,7 +91,6 @@ class S3Service:
             )
 
         try:
-            # запускаем синхронный upload в thread-пуле, чтобы не блокировать event loop
             await anyio.to_thread.run_sync(_do_upload)
             s3_path = f"s3://{self.bucket}/{key}"
             logger.info(f"Uploaded to {s3_path}")
@@ -92,13 +99,13 @@ class S3Service:
             logger.exception(f"Failed to upload {key} to bucket {self.bucket}")
             raise
 
-    def get_object_stream(self, key: str) -> Tuple[any, str, Optional[int]]:
+    def get_object_stream(self, key: str) -> Tuple[Any, str, Optional[int]]:
         """
         Возвращает поток (body), content-type и content-length для скачивания.
         """
         try:
             resp = self.client.get_object(Bucket=self.bucket, Key=key)
-            body = resp["Body"]  # это file-like streaming object
+            body = resp["Body"]
             ct = resp.get("ContentType", "application/octet-stream")
             cl = resp.get("ContentLength")
             return body, ct, cl
@@ -120,6 +127,10 @@ class S3Service:
     def build_public_url(self, key: str) -> str:
         """
         Построить публичный URL (если объект public-read).
+
+        Для Contabo US с кастомным PUBLIC_BASE_URL:
+          CONTABO_S3_PUBLIC_BASE_URL="https://usc1.contabostorage.com/<storageName>:fadder"
+        Итог: https://usc1.contabostorage.com/<storageName>:fadder/<key>
         """
         return f"{self.public_base_url}/{key}"
 
@@ -133,7 +144,6 @@ def _from_env(name: str, default: Optional[str] = None, required: bool = True) -
     return val  # type: ignore[return-value]
 
 
-
 s3_service = S3Service(
     endpoint_url=settings.S3_CONTABO_ENDPOINT,
     access_key=settings.S3_CONTABO_ACCESS_KEY,
@@ -141,4 +151,5 @@ s3_service = S3Service(
     bucket=settings.S3_CONTABO_BUCKET,
     region_name=settings.S3_CONTABO_REGION,
     addressing_style=settings.S3_CONTABO_ADDRESSING_STYLE,
+    public_base_url=getattr(settings, "CONTABO_S3_PUBLIC_BASE_URL", None),
 )
