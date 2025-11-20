@@ -511,6 +511,7 @@ class LotBase(PrefixIDModel):
     price = fields.FloatField(null=True, index=True)
     reserve_price = fields.FloatField(null=True)
     bid = fields.FloatField(index=True)
+    current_bid = fields.FloatField(index=True)
     auction_date = fields.DatetimeField(null=True, index=True)
     cost_repair = fields.FloatField(null=True)
     year = fields.IntField(index=True)

@@ -156,6 +156,7 @@ class VehicleModel(BaseModel):
     price: Optional[float] = Field(None, ge=0)
     reserve_price: Optional[float] = Field(None, ge=0)
     bid: float = Field(0, ge=0)
+    current_bid: float = Field(0, ge=0)
     auction_date: Optional[datetime] = None
     cost_repair: Optional[float] = Field(None, ge=0)
     year: int = Field(..., ge=1900, le=datetime.now().year)

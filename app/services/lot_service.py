@@ -119,6 +119,7 @@ async def add_sharding_lot(lot: Lot):
             'price': old_lot.price,
             'reserve_price': old_lot.reserve_price,
             'bid': old_lot.bid,
+            'current_bid': old_lot.current_bid,
             'auction_date': old_lot.auction_date,
             'cost_repair': old_lot.cost_repair,
             'year': old_lot.year,
@@ -270,6 +271,7 @@ async def generate_history_dropdown(cache, vin, is_historical, language):
                 "image_thubnail": lot.image_thubnail,
                 "odometer": lot.odometer,
                 "bid": lot.bid,
+                "current_bid": lot.current_bid,
                 "final_bid": lot.bid,
                 "status": lot.status,
                 "color": lot.color.name if lot.color else None,
@@ -402,6 +404,7 @@ async def serialize_lot(language, lot: Lot) -> Dict[str, Any]:
         "price": lot.price,
         "reserve_price": lot.reserve_price,
         "bid": lot.bid,
+        "current_bid": lot.current_bid,
         "auction_date": lot.auction_date.isoformat() if lot.auction_date else None,
         "cost_repair": lot.cost_repair,
         "year": lot.year,
@@ -1062,6 +1065,7 @@ async def create_lot_with_relations(lot_data: dict) -> Optional[LotBase]:
                 'price': lot_data.get('price'),
                 'reserve_price': lot_data.get('reserve_price'),
                 'bid': lot_data.get('bid', 0),
+                'current_bid': lot_data.get('current_bid', 0),
                 'auction_date': auction_date,
                 'cost_repair': lot_data.get('cost_repair'),
                 'year': lot_data['year'],
@@ -1338,6 +1342,7 @@ async def update_lot_with_relations(lot_data: dict) -> Optional[LotBase]:
                 'price': lot_data.get('price'),
                 'reserve_price': lot_data.get('reserve_price'),
                 'bid': lot_data.get('bid', 0),
+                'current_bid': lot_data.get('current_bid',0),
                 'auction_date': auction_date,
                 'cost_repair': lot_data.get('cost_repair'),
                 'year': lot_data['year'],
@@ -1964,7 +1969,7 @@ async def get_filtered_lots(
     
     limit = max(1, min(limit, 100))
     sort_by = sort_by if sort_by in {
-        "auction_date", "price", "year", "odometer", "created_at", "bid", "reserve_price"
+        "auction_date", "price", "year", "odometer", "created_at", "bid", "current_bid", "reserve_price"
     } else "auction_date"
     sort_order = sort_order.lower() if sort_order.lower() in {"asc", "desc"} else "desc"
     cached_result = None
@@ -1999,7 +2004,7 @@ async def get_filtered_lots(
                 logger.error(f"Error with model_type {model_type}: {e}")
                 model_type = "Lot1"
 
-            if sort_by == "bid":
+            if sort_by == "bid" or sort_by == "current_bid":
                 model_type = "Lot6"
 
             if is_historical:
@@ -2656,6 +2661,7 @@ async def lot_to_dict(language, lot) -> Dict:
         "price": lot.price,
         "reserve_price": lot.reserve_price,
         "bid": lot.bid,
+        "current_bid": lot.current_bid,
         "auction_date": lot.auction_date.isoformat() if lot.auction_date else None,
         "cost_repair": lot.cost_repair,
         "year": lot.year,
