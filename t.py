@@ -14,7 +14,8 @@ from playwright.async_api import async_playwright, TimeoutError as PlaywrightTim
 from io import BytesIO
 from urllib.parse import urlparse
 import mimetypes
-from app.services.store.s3 import s3_service
+from app.services.store.s3contabo import s3_service
+from app.core.config.config import settings
 
 load_dotenv()
 
@@ -394,6 +395,9 @@ class CopartBot:
         // Time left: "0D 4H 41min"
         const timeLeft = txt("span[data-uname='lotdetailSaleinformationtimeleftvalue']");
 
+        // ✅ Текущая ставка, например "$4,000.00"
+        const currentBid = txt("span.bid-price");
+
         return {
             title: txt("h1.title"),
             lot_number: lotFromPage || lotFromUrl,
@@ -411,10 +415,11 @@ class CopartBot:
             keys: txt("span[data-uname='lotdetailKeyvalue']"),
             images: uniq(thumbImgs),
 
-            // НОВОЕ:
+            // НОВОЕ + старое:
             sale_state: saleState,
             sale_location: saleLocation,
             time_left: timeLeft,
+            current_bid: currentBid,   // ✅ добавили
         };
         }
         """)
@@ -644,7 +649,8 @@ async def mirror_copart_images_to_s3(lot_id: str, thumbs: List[str]) -> tuple[Li
                 continue
 
             public_url = s3_service.build_public_url(key)
-            out.append(public_url)
+            print(public_url)
+            out.append(public_url.replace("https://usc1.contabostorage.com/fadder", settings.CONTABO_S3_PUBLIC_URL))
 
         return out
 
@@ -684,6 +690,16 @@ def map_factum_to_model_from_details(item: Dict[str, Any]) -> Optional[Dict[str,
             return int(m.group(1))
         except ValueError:
             return None
+
+    def parse_current_bid(bid_raw: str) -> int:
+        """
+        '$4,000.00' -> 4000
+        '€ 1 500'   -> 1500
+        """
+        bid_raw = bid_raw or ""
+        digits = re.sub(r"[^\d]", "", bid_raw)
+        return int(digits) if digits else 0
+
 
     def parse_make_model_body_type(title: str) -> tuple[str, str, str]:
         """
@@ -811,6 +827,9 @@ def map_factum_to_model_from_details(item: Dict[str, Any]) -> Optional[Dict[str,
     # Time left → auction_date (полный datetime)
     auction_date_iso = calc_auction_datetime(item.get("time_left"))
 
+
+    current_bid_raw = s(item.get("current_bid"))
+    current_bid_val = parse_current_bid(current_bid_raw)
     # make/model/body_type из title
     make, model, body_type = parse_make_model_body_type(title)
 
@@ -854,6 +873,7 @@ def map_factum_to_model_from_details(item: Dict[str, Any]) -> Optional[Dict[str,
         "price": 0,
         "reserve_price": 0,
         "bid": 0,
+        "current_bid": current_bid_val,
         "auction_date": auction_date_iso,  # ✅ полное datetime ISO из Time left
         "cost_repair": 0,
         "year": year,
