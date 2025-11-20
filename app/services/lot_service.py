@@ -2344,12 +2344,13 @@ async def get_filtered_lots(
             "engine_size": basic_stats[2],
             "cylinders": basic_stats[3],
         })
+        total_count = await query.count()
+
 
     # Final vehicle type stats
     # query = HistoricalLot.all() if is_historical else VALIDATOR_MODEL[f'{model_type}'].all() if model_type else Lot1.all()
     vehicle_types = await VehicleType.all()
     auto_stat = []
-    total_count = await query.count()
     for vt in vehicle_types:
         if vt.slug == "other":
             continue  # исключаем 'other'
