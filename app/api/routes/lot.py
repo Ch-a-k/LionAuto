@@ -192,104 +192,104 @@ async def get_refine_filters(
                 logger.error(f"Cache key: {cache_key}, Cached data: {cached_result[:200] if cached_result else 'None'}")
 
     # Если не кэш — запускаем celery задачу
-    # try:
-    auction_date_from_dt = datetime.fromisoformat(auction_date_from) if auction_date_from else None
-    auction_date_to_dt = datetime.fromisoformat(auction_date_to) if auction_date_to else None
-    
-    result = await get_filtered_lots(
-        cache=cache,
-        full_url=full_url,
-        language=language,
-        is_historical=is_historical,
-        base_site=base_site,
-        min_year=min_year,
-        max_year=max_year,
-        min_odometer=min_odometer,
-        max_odometer=max_odometer,
+    try:
+        auction_date_from_dt = datetime.fromisoformat(auction_date_from) if auction_date_from else None
+        auction_date_to_dt = datetime.fromisoformat(auction_date_to) if auction_date_to else None
+        
+        result = await get_filtered_lots(
+            cache=cache,
+            full_url=full_url,
+            language=language,
+            is_historical=is_historical,
+            base_site=base_site,
+            min_year=min_year,
+            max_year=max_year,
+            min_odometer=min_odometer,
+            max_odometer=max_odometer,
 
-        # Фильтры по связанным моделям
-        make_slug=make_slug,
-        model_slug=model_slug,
-        vehicle_type_slug=vehicle_type_slug,
-        damage_pr_slug=damage_pr_slug,
-        damage_sec_slug=damage_sec_slug,
-        fuel_slug=fuel_slug,
-        drive_slug=drive_slug,
-        transmission_slug=transmission_slug,
-        color_slug=color_slug,
-        status_slug=status_slug,
-        auction_status_slug=auction_status_slug,
-        body_type_slug=body_type_slug,
-        series_slug = series_slug,
-        title_slug = title_slug,
-        seller_slug = seller_slug,
-        seller_type_slug = seller_type_slug,
-        document_slug = document_slug,
-        document_old_slug = document_old_slug,
-        cylinders = cylinders,
-        engine = engine,
-        engine_size = engine_size,
-        # Дополнительные фильтры
-        state=state,
-        # country=country,
-        is_buynow=is_buynow,
-        min_risk_index=min_risk_index,
-        max_risk_index=max_risk_index,
-        auction_date_from=auction_date_from_dt,
-        auction_date_to=auction_date_to_dt,
+            # Фильтры по связанным моделям
+            make_slug=make_slug,
+            model_slug=model_slug,
+            vehicle_type_slug=vehicle_type_slug,
+            damage_pr_slug=damage_pr_slug,
+            damage_sec_slug=damage_sec_slug,
+            fuel_slug=fuel_slug,
+            drive_slug=drive_slug,
+            transmission_slug=transmission_slug,
+            color_slug=color_slug,
+            status_slug=status_slug,
+            auction_status_slug=auction_status_slug,
+            body_type_slug=body_type_slug,
+            series_slug = series_slug,
+            title_slug = title_slug,
+            seller_slug = seller_slug,
+            seller_type_slug = seller_type_slug,
+            document_slug = document_slug,
+            document_old_slug = document_old_slug,
+            cylinders = cylinders,
+            engine = engine,
+            engine_size = engine_size,
+            # Дополнительные фильтры
+            state=state,
+            # country=country,
+            is_buynow=is_buynow,
+            min_risk_index=min_risk_index,
+            max_risk_index=max_risk_index,
+            auction_date_from=auction_date_from_dt,
+            auction_date_to=auction_date_to_dt,
 
-        # Пагинация и сортировка
-        limit=limit,
-        offset=offset,
-        sort_by=sort_by,
-        sort_order=sort_order
-    )
-    
-    if special_filter:
-        key = f"{settings.CACHE_KEY}_{special_filter[0]}_{offset}_{language}_{"nonactive" if is_historical else "active"}"
-        cached_result = await cache.get(key)
-        logger.debug(f'SPEACIAL FILTERS KEY TO GET: {key}')
-        if cached_result:
-            logger.debug('Get cached result by special filters')
-            lots = json.loads(cached_result)
-        else:
-            lots = await get_special_filtered_lots(
-                is_historical=is_historical,
-                special_filter=special_filter,
-                limit=limit,
-                offset=offset,
-                language=language
-            )
-        result["lots"] = lots["results"]
-        result["count"] = lots["count"]
-    if min_price or max_price:
-        key = f"{settings.CACHE_KEY}_min_price{min_price}max_price{max_price}{offset}"
-        special_cached_result = await cache.get(key)
-        if special_cached_result:
-            lots = json.loads(special_cached_result)
-            result["lots"] = lots["results"]["results"]
-            result["count"] = lots["count"]["count"]
-        else:
-            lots = await find_lots_by_price_range(
-                min_price=min_price,
-                max_price=max_price,
-                is_historical=is_historical,
-                limit=limit,
-                offset=offset,
-                language=language
-            )
+            # Пагинация и сортировка
+            limit=limit,
+            offset=offset,
+            sort_by=sort_by,
+            sort_order=sort_order
+        )
+        
+        if special_filter:
+            key = f"{settings.CACHE_KEY}_{special_filter[0]}_{offset}_{language}_{"nonactive" if is_historical else "active"}"
+            cached_result = await cache.get(key)
+            logger.debug(f'SPEACIAL FILTERS KEY TO GET: {key}')
+            if cached_result:
+                logger.debug('Get cached result by special filters')
+                lots = json.loads(cached_result)
+            else:
+                lots = await get_special_filtered_lots(
+                    is_historical=is_historical,
+                    special_filter=special_filter,
+                    limit=limit,
+                    offset=offset,
+                    language=language
+                )
             result["lots"] = lots["results"]
             result["count"] = lots["count"]
-    list_lot_ids_to_cache = []
-    list_vin = []
-    for lot in result['lots']:
-        list_lot_ids_to_cache.append(lot['id'])
-        list_vin.append(lot['vin'])
-    # asyncio.create_task(create_cache_for_catalog(cache, language,list_lot_ids_to_cache,list_vin, is_historical))
-    return result
-    # except Exception as e:
-    #     logger.error(f"Failed to start refine task: {str(e)}")
-    #     raise HTTPException(status_code=500, detail="Failed to start refinement task")
+        if min_price or max_price:
+            key = f"{settings.CACHE_KEY}_min_price{min_price}max_price{max_price}{offset}"
+            special_cached_result = await cache.get(key)
+            if special_cached_result:
+                lots = json.loads(special_cached_result)
+                result["lots"] = lots["results"]["results"]
+                result["count"] = lots["count"]["count"]
+            else:
+                lots = await find_lots_by_price_range(
+                    min_price=min_price,
+                    max_price=max_price,
+                    is_historical=is_historical,
+                    limit=limit,
+                    offset=offset,
+                    language=language
+                )
+                result["lots"] = lots["results"]
+                result["count"] = lots["count"]
+        list_lot_ids_to_cache = []
+        list_vin = []
+        for lot in result['lots']:
+            list_lot_ids_to_cache.append(lot['id'])
+            list_vin.append(lot['vin'])
+        # asyncio.create_task(create_cache_for_catalog(cache, language,list_lot_ids_to_cache,list_vin, is_historical))
+        return result
+    except Exception as e:
+        logger.error(f"Failed to start refine task: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to start refinement task")
 
 
 @router.post("/create", response_model=TaskResponseModel)

@@ -2363,6 +2363,7 @@ async def get_filtered_lots(
             await Lot6.filter(vehicle_type=vt).count() +
             await Lot7.filter(vehicle_type=vt).count()
         )
+        logger.debug(f"DEBUG COUNTS LOT: {count}")
 
         item = {
             "id": vt.id,
