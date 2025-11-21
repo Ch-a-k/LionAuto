@@ -7,7 +7,7 @@ from app.schemas import (VehicleModel,  VehicleModelOther,
                          LotSearchResponse, LotHistoryItem, VehicleModelResponse)
 from fastapi.responses import JSONResponse
 from app.services import (get_lot_by_lot_id_from_database, get_lot_by_id_from_database, 
-                          find_similar_lots, serialize_lot, get_lots_count_by_vehicle_type,
+                          get_similar_lots_by_id, serialize_lot, get_lots_count_by_vehicle_type,
                           search_lots, get_popular_brands_function, get_special_filtered_lots,
                           get_filtered_lots, create_cache_for_catalog, filter_copart_hd_images,
                           lot_to_dict, find_lots_by_price_range, generate_history_dropdown)
@@ -800,7 +800,7 @@ async def get_lot_by_id(
         if cached_result:
             result_dict = json.loads(cached_result)
             return result_dict
-        lot = await get_lot_by_id_from_database(id, language, is_historical)
+        lot = await get_similar_lots_by_id(id, language, is_historical)
         if not lot:
             raise HTTPException(status_code=404, detail="Лот не найден")
 
