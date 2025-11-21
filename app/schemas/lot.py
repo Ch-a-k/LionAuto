@@ -20,6 +20,7 @@ class FilterCounts(BaseModel):
     odometer: Optional[Dict[int, int]] = None
     risk_index: Optional[Dict[str, int]] = None
     bid: Optional[Dict[float, int]] = None
+    current_bid: Optional[Dict[float, int]] = None
     buy_it_now_price: Optional[Dict[float, int]] = None
     est_retail_value: Optional[Dict[float, int]] = None
 
@@ -214,7 +215,7 @@ class VehicleModel(BaseModel):
             raise ValueError('VIN must be exactly 17 characters')
         return v.upper()  # Приводим к верхнему регистру
 
-    @field_validator('price', 'reserve_price', 'bid', 'cost_repair', 'engine_size')
+    @field_validator('price', 'reserve_price', 'bid', 'current_bid', 'cost_repair', 'engine_size')
     def validate_positive_values(cls, v):
         if v is not None and v < 0:
             raise ValueError('Value must be a positive number')
@@ -228,6 +229,7 @@ class VehicleModelOther(BaseModel):
     price: Optional[float] = Field(None, ge=0)
     reserve_price: Optional[float] = Field(None, ge=0)
     bid: float = Field(0, ge=0)
+    current_bid: float = Field(0, ge=0)
     auction_date: Optional[datetime] = None
     cost_repair: Optional[float] = Field(None, ge=0)
     year: int = Field(..., ge=1900, le=datetime.now().year)
@@ -283,7 +285,7 @@ class VehicleModelOther(BaseModel):
     def validate_vin(cls, v):
         return v.upper()  # Приводим к верхнему регистру
 
-    @field_validator('price', 'reserve_price', 'bid', 'cost_repair', 'engine_size')
+    @field_validator('price', 'reserve_price', 'bid', 'current_bid', 'cost_repair', 'engine_size')
     def validate_positive_values(cls, v):
         if v is not None and v < 0:
             raise ValueError('Value must be a positive number')
@@ -297,6 +299,7 @@ class VehicleModelResponse(BaseModel):
     price: Optional[float] = Field(None, ge=0, description="Цена")
     reserve_price: Optional[float] = Field(None, ge=0, description="Резервная цена")
     bid: float = Field(0, ge=0, description="Текущая ставка")
+    current_bid: float = Field(0, ge=0, description="Текущая ставка")
     auction_date: Optional[datetime] = Field(None, description="Дата аукциона")
     cost_repair: Optional[float] = Field(None, ge=0, description="Стоимость ремонта")
     year: int = Field(..., ge=1900, le=datetime.now().year, description="Год выпуска")
@@ -356,7 +359,7 @@ class VehicleModelResponse(BaseModel):
             raise ValueError('VIN must be exactly 17 characters')
         return v.upper()
 
-    @field_validator('price', 'reserve_price', 'bid', 'cost_repair', 'engine_size')
+    @field_validator('price', 'reserve_price', 'bid', 'current_bid', 'cost_repair', 'engine_size')
     def validate_positive_values(cls, v):
         if v is not None and v < 0:
             raise ValueError('Value must be a positive number')
@@ -463,6 +466,7 @@ class LotHistoryItem(BaseModel):
     image_thubnail: str
     odometer: int
     bid: float
+    current_bid: float
     final_bid: float
     status: str
     color: str
