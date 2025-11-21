@@ -451,20 +451,22 @@ async def get_lot_by_id_from_database(id: int, language: str = "ru", is_historic
     return None
 
 
+from typing import Dict, Any
+
 async def serialize_lot(language, lot: Lot) -> Dict[str, Any]:
     """
     Полностью преобразует объект лота и все связанные объекты в словарь.
     Включает все поля из основной таблицы и все поля из связанных таблиц.
     """
     # Основные поля лота
-    lot_dict = {
+    lot_dict: Dict[str, Any] = {
         "id": lot.id,
         "lot_id": lot.lot_id,
         "odometer": lot.odometer,
         "price": lot.price,
         "reserve_price": lot.reserve_price,
         "bid": lot.bid,
-        "current_bid": lot.current_bid/100,
+        "current_bid": lot.current_bid / 100,
         "auction_date": lot.auction_date.isoformat() if lot.auction_date else None,
         "cost_repair": lot.cost_repair,
         "year": lot.year,
@@ -482,8 +484,8 @@ async def serialize_lot(language, lot: Lot) -> Dict[str, Any]:
         "link_img_small": lot.link_img_small,
         "link": lot.link,
         "risk_index": lot.risk_index,
-        "created_at": lot.created_at.isoformat(),
-        "updated_at": lot.updated_at.isoformat(),
+        "created_at": lot.created_at.isoformat() if lot.created_at else None,
+        "updated_at": lot.updated_at.isoformat() if lot.updated_at else None,
         "is_historical": lot.is_historical,
     }
 
@@ -491,13 +493,13 @@ async def serialize_lot(language, lot: Lot) -> Dict[str, Any]:
     async def serialize_related(obj):
         if obj is None:
             return None
-        
-        result = {
+
+        result: Dict[str, Any] = {
             "id": obj.id,
             "name": obj.name,
             "slug": obj.slug,
         }
-        
+
         # Добавляем специфичные поля для разных моделей
         if isinstance(obj, VehicleType):
             result["icon_path"] = obj.icon_path
@@ -509,14 +511,14 @@ async def serialize_lot(language, lot: Lot) -> Dict[str, Any]:
             result.update({
                 "hex": obj.hex,
                 "letter": obj.letter,
-                "description": obj.description
+                "description": obj.description,
             })
         elif isinstance(obj, Make):
             result.update({
                 "popular_counter": obj.popular_counter,
-                "icon_path": obj.icon_path
+                "icon_path": obj.icon_path,
             })
-        
+
         return result
 
     # Сериализуем все связанные объекты
@@ -541,26 +543,70 @@ async def serialize_lot(language, lot: Lot) -> Dict[str, Any]:
         "seller_type": lot.seller_type,
         "seller": lot.seller,
         "document": lot.document,
-        "document_old": lot.document_old
+        "document_old": lot.document_old,
     }
 
     for field_name, related_obj in related_fields.items():
         if related_obj is not None:
             # Если объект уже загружен (благодаря prefetch_related)
             if isinstance(related_obj, (int, str)):
-                # Если это ID (не должно происходить благодаря prefetch_related)
+                # На случай, если вдруг прилетел ID
                 lot_dict[field_name] = {"id": related_obj}
             else:
                 lot_dict[field_name] = await serialize_related(related_obj)
-            translated_value = await get_translation(
-                field_name=field_name, 
-                original_value=lot_dict[field_name]['slug'], 
-                language=language
+
+            # Перевод name по slug
+            slug_val = lot_dict[field_name].get("slug") if isinstance(lot_dict[field_name], dict) else None
+            if slug_val:
+                translated_value = await get_translation(
+                    field_name=field_name,
+                    original_value=slug_val,
+                    language=language,
                 )
-            if translated_value:
-                lot_dict[field_name]['name'] = translated_value
+                if translated_value:
+                    lot_dict[field_name]["name"] = translated_value
         else:
             lot_dict[field_name] = None
+
+    # ============================
+    # COPART — фильтрация HD фоток
+    # ============================
+    try:
+        base_site_slug = None
+
+        # Пытаемся взять slug из сериализованного base_site
+        base_site_data = lot_dict.get("base_site")
+        if isinstance(base_site_data, dict):
+            base_site_slug = base_site_data.get("slug")
+
+        # Если вдруг выше не удалось — пробуем напрямую из lot.base_site
+        if not base_site_slug and getattr(lot, "base_site", None) is not None:
+            base_site_slug = getattr(lot.base_site, "slug", None)
+
+        link_img_hd = lot_dict.get("link_img_hd")
+
+        # Проверяем, что это Copart и link_img_hd — строка
+        if base_site_slug == "copart" and isinstance(link_img_hd, str) and link_img_hd:
+            # Пример: fadder/copart/71256375/hd/009.jpg
+            parts = link_img_hd.split("/")
+            if len(parts) >= 2:
+                filename = parts[-1]                 # 009.jpg
+                prefix = "/".join(parts[:-1])        # fadder/copart/71256375/hd
+
+                if "." in filename:
+                    name_part, ext = filename.rsplit(".", 1)
+                else:
+                    name_part, ext = filename, ""
+
+                allowed_numbers = ["000", "002", "004", "006", "008"]
+
+                if ext:
+                    lot_dict["link_img_hd"] = [f"{prefix}/{num}.{ext}" for num in allowed_numbers]
+                else:
+                    lot_dict["link_img_hd"] = [f"{prefix}/{num}" for num in allowed_numbers]
+    except Exception as e:
+        # Чтобы не ломать API, просто логируем
+        print("ERROR processing copart HD images in serialize_lot:", e)
 
     # Удаляем None значения для необязательных полей
     lot_dict = {k: v for k, v in lot_dict.items() if v is not None}

@@ -376,9 +376,9 @@ async def get_similar_lots(
                 
                 # Исключаем служебные поля Tortoise ORM
                 exclude_fields = {
-                    '_partial', '_custom_generated_pk', '_await_when_save', 
-                    '_saved_in_db', '_fetched', '_custom_generated', '_state',
-                    'vehicle_type_id', 'make_id'
+                    "_partial", "_custom_generated_pk", "_await_when_save",
+                    "_saved_in_db", "_fetched", "_custom_generated", "_state",
+                    "vehicle_type_id", "make_id"
                 }
                 
                 return {
@@ -394,7 +394,7 @@ async def get_similar_lots(
                 "price": lot.price,
                 "reserve_price": lot.reserve_price,
                 "bid": lot.bid,
-                "current_bid": lot.current_bid,
+                "current_bid": lot.current_bid,  # если нужно /100 – скажи, поменяем
                 "auction_date": lot.auction_date.isoformat() if lot.auction_date else None,
                 "cost_repair": lot.cost_repair,
                 "year": lot.year,
@@ -412,8 +412,8 @@ async def get_similar_lots(
                 "link_img_small": lot.link_img_small,
                 "link": lot.link,
                 "risk_index": lot.risk_index,
-                "created_at": lot.created_at.isoformat(),
-                "updated_at": lot.updated_at.isoformat(),
+                "created_at": lot.created_at.isoformat() if lot.created_at else None,
+                "updated_at": lot.updated_at.isoformat() if lot.updated_at else None,
                 "is_historical": lot.is_historical,
             }
             
@@ -442,19 +442,65 @@ async def get_similar_lots(
                 "document_old": lot.document_old
             }
             
-            # Преобразуем связанные объекты
+            # Преобразуем связанные объекты + переводим name
             for field_name, related_obj in related_fields.items():
                 if related_obj is not None:
                     lot_dict[field_name] = to_dict(related_obj)
-                    translated_value = await get_translation(
-                        field_name=field_name, 
-                        original_value=lot_dict[field_name]['slug'], 
-                        language=language
+                    slug_val = lot_dict[field_name].get("slug")
+                    if slug_val:
+                        translated_value = await get_translation(
+                            field_name=field_name,
+                            original_value=slug_val,
+                            language=language
                         )
-                    if translated_value:
-                        lot_dict[field_name]['name'] = translated_value
+                        if translated_value:
+                            lot_dict[field_name]["name"] = translated_value
                 else:
                     lot_dict[field_name] = None
+
+            # ============================
+            # COPART — фильтрация HD фоток
+            # ============================
+            try:
+                base_site_slug = None
+
+                # Пытаемся получить slug из сериализованного base_site
+                base_site_data = lot_dict.get("base_site")
+                if isinstance(base_site_data, dict):
+                    base_site_slug = base_site_data.get("slug")
+
+                # Fallback: напрямую из ORM-объекта
+                if not base_site_slug and getattr(lot, "base_site", None) is not None:
+                    base_site_slug = getattr(lot.base_site, "slug", None)
+
+                link_img_hd = lot_dict.get("link_img_hd")
+
+                # Если Copart и link_img_hd — строка, делаем 000,002,004,006,008
+                if base_site_slug == "copart" and isinstance(link_img_hd, str) and link_img_hd:
+                    # Пример: fadder/copart/71256375/hd/009.jpg
+                    parts = link_img_hd.split("/")
+                    if len(parts) >= 2:
+                        filename = parts[-1]          # 009.jpg
+                        prefix = "/".join(parts[:-1]) # fadder/copart/71256375/hd
+
+                        if "." in filename:
+                            name_part, ext = filename.rsplit(".", 1)
+                        else:
+                            name_part, ext = filename, ""
+
+                        allowed_numbers = ["000", "002", "004", "006", "008"]
+
+                        if ext:
+                            lot_dict["link_img_hd"] = [
+                                f"{prefix}/{num}.{ext}" for num in allowed_numbers
+                            ]
+                        else:
+                            lot_dict["link_img_hd"] = [
+                                f"{prefix}/{num}" for num in allowed_numbers
+                            ]
+            except Exception as e:
+                # Не ломаем весь ответ, просто лог
+                print("ERROR processing copart HD images in /similar_lots:", e)
             
             # Удаляем None значения для необязательных полей
             lot_dict = {k: v for k, v in lot_dict.items() if v is not None}
