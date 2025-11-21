@@ -451,8 +451,6 @@ async def get_lot_by_id_from_database(id: int, language: str = "ru", is_historic
     return None
 
 
-from typing import Dict, Any
-
 async def serialize_lot(language, lot: Lot) -> Dict[str, Any]:
     """
     Полностью преобразует объект лота и все связанные объекты в словарь.
@@ -583,27 +581,15 @@ async def serialize_lot(language, lot: Lot) -> Dict[str, Any]:
         if not base_site_slug and getattr(lot, "base_site", None) is not None:
             base_site_slug = getattr(lot.base_site, "slug", None)
 
-        link_img_hd = lot_dict.get("link_img_hd")
-
-        # Проверяем, что это Copart и link_img_hd — строка
-        if base_site_slug == "copart" and isinstance(link_img_hd, str) and link_img_hd:
-            # Пример: fadder/copart/71256375/hd/009.jpg
-            parts = link_img_hd.split("/")
-            if len(parts) >= 2:
-                filename = parts[-1]                 # 009.jpg
-                prefix = "/".join(parts[:-1])        # fadder/copart/71256375/hd
-
-                if "." in filename:
-                    name_part, ext = filename.rsplit(".", 1)
-                else:
-                    name_part, ext = filename, ""
-
-                allowed_numbers = ["000", "002", "004", "006", "008"]
-
-                if ext:
-                    lot_dict["link_img_hd"] = [f"{prefix}/{num}.{ext}" for num in allowed_numbers]
-                else:
-                    lot_dict["link_img_hd"] = [f"{prefix}/{num}" for num in allowed_numbers]
+        if base_site_slug == "copart":
+            # тут уже не важно: строка или список — хелпер разрулит
+            lot_dict["link_img_hd"] = filter_copart_hd_images(
+                lot_dict.get("link_img_hd")
+            )
+            # если захочешь — можно так же отфильтровать и маленькие:
+            # lot_dict["link_img_small"] = filter_copart_hd_images(
+            #     lot_dict.get("link_img_small")
+            # )
     except Exception as e:
         # Чтобы не ломать API, просто логируем
         print("ERROR processing copart HD images in serialize_lot:", e)
@@ -612,6 +598,56 @@ async def serialize_lot(language, lot: Lot) -> Dict[str, Any]:
     lot_dict = {k: v for k, v in lot_dict.items() if v is not None}
 
     return lot_dict
+
+
+from typing import List, Union, Optional
+
+def filter_copart_hd_images(link_img_hd: Optional[Union[str, List[str]]]) -> Optional[List[str]]:
+    """
+    Приводит link_img_hd к списку только с 000, 002, 004, 006, 008.
+    Поддерживает и строку, и список строк. Если не удаётся обработать — вернёт исходное значение.
+    """
+    if not link_img_hd:
+        return link_img_hd
+
+    allowed_numbers = {"000", "002", "004", "006", "008"}
+
+    # Если одна строка - генерим список по шаблону как раньше
+    if isinstance(link_img_hd, str):
+        parts = link_img_hd.split("/")
+        if len(parts) >= 2:
+            filename = parts[-1]              # 009.jpg
+            prefix = "/".join(parts[:-1])     # .../hd
+            if "." in filename:
+                name_part, ext = filename.rsplit(".", 1)
+            else:
+                name_part, ext = filename, ""
+
+            if ext:
+                return [f"{prefix}/{num}.{ext}" for num in sorted(allowed_numbers)]
+            else:
+                return [f"{prefix}/{num}" for num in sorted(allowed_numbers)]
+        # если вдруг формат странный — вернём как есть
+        return [link_img_hd]
+
+    # Если список URL-ов — фильтруем по имени файла
+    if isinstance(link_img_hd, list):
+        filtered = []
+        for url in link_img_hd:
+            try:
+                last_part = url.split("/")[-1]       # 000.jpg
+                name_part = last_part.split(".")[0]  # 000
+                if name_part in allowed_numbers:
+                    filtered.append(url)
+            except Exception:
+                # если что-то странное, можем просто скипнуть/добавить — решай сам
+                continue
+        # если ничего не нашли, лучше вернуть исходный список, чтобы не ломать фронт
+        return filtered or link_img_hd
+
+    # На всякий пожарный — вернуть как есть
+    return link_img_hd
+
 
 
 async def get_lot_by_lot_id_from_database(
@@ -2830,37 +2866,14 @@ async def lot_to_dict(language, lot) -> Dict:
     # COPART — фильтрация HD фоток
     # ============================
     try:
-        # пытаемся взять slug из result, либо напрямую из lot.base_site
         base_site_slug = result.get("base_site_slug")
-        if not base_site_slug:
-            base_site = getattr(lot, "base_site", None)
-            if base_site is not None and getattr(base_site, "slug", None):
-                base_site_slug = base_site.slug
+        if not base_site_slug and getattr(lot, "base_site", None) is not None:
+            base_site_slug = getattr(lot.base_site, "slug", None)
 
-        link_img_hd = result.get("link_img_hd")
-
-        # Проверяем, что это Copart и что у нас есть строка с HD-ссылкой
-        if base_site_slug == "copart" and isinstance(link_img_hd, str) and link_img_hd:
-            # Пример: fadder/copart/71256375/hd/009.jpg
-            parts = link_img_hd.split("/")
-            if len(parts) >= 2:
-                filename = parts[-1]  # 009.jpg
-                prefix = "/".join(parts[:-1])  # fadder/copart/71256375/hd
-
-                if "." in filename:
-                    name_part, ext = filename.rsplit(".", 1)
-                else:
-                    name_part, ext = filename, ""
-
-                allowed_numbers = ["000", "002", "004", "006", "008"]
-
-                if ext:
-                    result["link_img_hd"] = [f"{prefix}/{num}.{ext}" for num in allowed_numbers]
-                else:
-                    result["link_img_hd"] = [f"{prefix}/{num}" for num in allowed_numbers]
+        if base_site_slug == "copart":
+            result["link_img_hd"] = filter_copart_hd_images(result.get("link_img_hd"))
     except Exception as e:
-        # Чтобы не ломать API, просто логируем в stdout
-        print("ERROR processing copart HD images:", e)
+        print("ERROR processing copart HD images in lot_to_dict:", e)
 
     return result
 

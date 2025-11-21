@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from app.services import (get_lot_by_lot_id_from_database, get_lot_by_id_from_database, 
                           find_similar_lots, serialize_lot, get_lots_count_by_vehicle_type,
                           search_lots, get_popular_brands_function, get_special_filtered_lots,
-                          get_filtered_lots, create_cache_for_catalog,
+                          get_filtered_lots, create_cache_for_catalog, filter_copart_hd_images,
                           lot_to_dict, find_lots_by_price_range, generate_history_dropdown)
 from typing import List, Optional, Union
 from app.models import HistoricalLot, Lot
@@ -394,7 +394,7 @@ async def get_similar_lots(
                 "price": lot.price,
                 "reserve_price": lot.reserve_price,
                 "bid": lot.bid,
-                "current_bid": lot.current_bid,  # если нужно /100 – скажи, поменяем
+                "current_bid": lot.current_bid,  # если нужно /100 – можно поменять
                 "auction_date": lot.auction_date.isoformat() if lot.auction_date else None,
                 "cost_repair": lot.cost_repair,
                 "year": lot.year,
@@ -473,31 +473,15 @@ async def get_similar_lots(
                 if not base_site_slug and getattr(lot, "base_site", None) is not None:
                     base_site_slug = getattr(lot.base_site, "slug", None)
 
-                link_img_hd = lot_dict.get("link_img_hd")
-
-                # Если Copart и link_img_hd — строка, делаем 000,002,004,006,008
-                if base_site_slug == "copart" and isinstance(link_img_hd, str) and link_img_hd:
-                    # Пример: fadder/copart/71256375/hd/009.jpg
-                    parts = link_img_hd.split("/")
-                    if len(parts) >= 2:
-                        filename = parts[-1]          # 009.jpg
-                        prefix = "/".join(parts[:-1]) # fadder/copart/71256375/hd
-
-                        if "." in filename:
-                            name_part, ext = filename.rsplit(".", 1)
-                        else:
-                            name_part, ext = filename, ""
-
-                        allowed_numbers = ["000", "002", "004", "006", "008"]
-
-                        if ext:
-                            lot_dict["link_img_hd"] = [
-                                f"{prefix}/{num}.{ext}" for num in allowed_numbers
-                            ]
-                        else:
-                            lot_dict["link_img_hd"] = [
-                                f"{prefix}/{num}" for num in allowed_numbers
-                            ]
+                if base_site_slug == "copart":
+                    # Используем хелпер, который умеет и строку, и список
+                    lot_dict["link_img_hd"] = filter_copart_hd_images(
+                        lot_dict.get("link_img_hd")
+                    )
+                    # Если нужно, можно так же отфильтровать и маленькие:
+                    # lot_dict["link_img_small"] = filter_copart_hd_images(
+                    #     lot_dict.get("link_img_small")
+                    # )
             except Exception as e:
                 # Не ломаем весь ответ, просто лог
                 print("ERROR processing copart HD images in /similar_lots:", e)
