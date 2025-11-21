@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import aiosqlite
-import requests
+import httpx
 from dotenv import load_dotenv
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 from io import BytesIO
@@ -41,7 +41,7 @@ SEARCH_RESULTS_URL = (
     "&displayStr=AUTOMOBILE,%5B0%20TO%209999999%5D,%5B2015%20TO%202026%5D&from=%2FvehicleFinder"
     "&fromSource=widget&qId=af2f7b1c-fd0a-11e9-a583-48df3771ed50-1763666292713"
 )
-
+IMAGE_CONCURRENCY = int(os.getenv("IMAGE_CONCURRENCY", "5")) 
 
 # =======================
 # Утилиты
@@ -602,32 +602,46 @@ def normalize_make(make: Optional[str]) -> Optional[str]:
     return title_case_name(make)
 
 
-async def mirror_copart_images_to_s3(lot_id: str, thumbs: List[str]) -> tuple[List[str], List[str]]:
+async def mirror_copart_images_to_s3(
+    lot_id: str,
+    thumbs: List[str],
+    client: Optional[httpx.AsyncClient] = None,
+) -> tuple[List[str], List[str]]:
     """
-    Берём thumbnail-URLs Copart, считаем из них small + HD (как раньше),
-    скачиваем и заливаем всё в S3.
+    Берём thumbnail-URLs Copart, считаем из них small + HD,
+    качаем и грузим в S3 ПАРАЛЛЕЛЬНО с ограничением по количеству.
 
     Возвращает (s3_small_urls, s3_hd_urls).
     """
-    # small / hd по старой логике
     small_urls, hd_urls, _ = build_image_sets(thumbs)
 
-    async def _mirror(urls: List[str], kind: str) -> List[str]:
-        out: List[str] = []
-        for idx, url in enumerate(urls):
-            url = url.strip()
-            if not url:
-                continue
+    sem = asyncio.Semaphore(IMAGE_CONCURRENCY)
 
+    # если клиент не передали — создаём временный
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=30)
+
+    assert client is not None
+
+    async def _process_one(idx: int, url: str, kind: str) -> Optional[str]:
+        url = (url or "").strip()
+        if not url:
+            return None
+
+        async with sem:
             try:
-                resp = requests.get(url, timeout=30)
+                resp = await client.get(url)
                 resp.raise_for_status()
             except Exception as e:
                 print(f"⚠️ Не удалось скачать {kind}-картинку {url}: {e}")
-                continue
+                return None
 
-            # определяем content-type и расширение
-            ct = resp.headers.get("Content-Type") or mimetypes.guess_type(url)[0] or "image/jpeg"
+            ct = (
+                resp.headers.get("content-type")
+                or mimetypes.guess_type(url)[0]
+                or "image/jpeg"
+            )
             ext = (
                 mimetypes.guess_extension(ct)
                 or os.path.splitext(urlparse(url).path)[1]
@@ -646,19 +660,31 @@ async def mirror_copart_images_to_s3(lot_id: str, thumbs: List[str]) -> tuple[Li
                 )
             except Exception as e:
                 print(f"⚠️ Не удалось загрузить {kind}-картинку в S3 ({key}): {e}")
-                continue
+                return None
 
             public_url = s3_service.build_public_url(key)
+            public_url = public_url.replace(
+                "https://usc1.contabostorage.com/fadder",
+                settings.CONTABO_S3_PUBLIC_URL,
+            )
             print(public_url)
-            out.append(public_url.replace("https://usc1.contabostorage.com/fadder", settings.CONTABO_S3_PUBLIC_URL))
+            return public_url
 
-        return out
+    try:
+        small_tasks = [
+            _process_one(idx, url, "small") for idx, url in enumerate(small_urls)
+        ]
+        hd_tasks = [
+            _process_one(idx, url, "hd") for idx, url in enumerate(hd_urls)
+        ]
 
-    s3_small = await _mirror(small_urls, "small")
-    s3_hd = await _mirror(hd_urls, "hd")
-    return s3_small, s3_hd
+        s3_small = [u for u in await asyncio.gather(*small_tasks) if u]
+        s3_hd = [u for u in await asyncio.gather(*hd_tasks) if u]
 
-
+        return s3_small, s3_hd
+    finally:
+        if own_client:
+            await client.aclose()
 
 
 
@@ -938,15 +964,23 @@ def send_batchs(models: List[Dict[str, Any]], chunk_size: int = MAX_BATCH_SIZE):
     total = len(models)
     print(f"🚚 Отправляю {total} лотов в {LOCAL_BATCH_URL} батчами по {chunk_size} ...")
 
-    for i in range(0, total, chunk_size):
-        chunk = models[i: i + chunk_size]
-        print(f"  → батч {i+1}-{i+len(chunk)} (из {total})")
-        resp = requests.post(LOCAL_BATCH_URL, json=chunk, headers=headers)
-        print("    STATUS:", resp.status_code)
-        try:
-            print("    RESPONSE JSON:", resp.json())
-        except Exception:
-            print("    RESPONSE TEXT:", resp.text[:1000])
+    # Один httpx.Client на все батчи → реюз соединения, быстрее и аккуратнее
+    with httpx.Client(timeout=30) as client:
+        for i in range(0, total, chunk_size):
+            chunk = models[i: i + chunk_size]
+            print(f"  → батч {i+1}-{i+len(chunk)} (из {total})")
+
+            try:
+                resp = client.post(LOCAL_BATCH_URL, json=chunk, headers=headers)
+            except httpx.RequestError as e:
+                print(f"    ❌ Ошибка при отправке батча: {e}")
+                continue
+
+            print("    STATUS:", resp.status_code)
+            try:
+                print("    RESPONSE JSON:", resp.json())
+            except Exception:
+                print("    RESPONSE TEXT:", resp.text[:1000])
 
 
 def calc_auction_datetime(time_left_str: str) -> str | None:
@@ -986,33 +1020,38 @@ def calc_auction_datetime(time_left_str: str) -> str | None:
 async def fetch_details_for_links(bot: CopartBot, links: List[str]) -> List[Dict[str, Any]]:
     results: List[Dict[str, Any]] = []
     total = len(links)
-    for idx, url in enumerate(links, start=1):
-        lot_id_from_url = url.split("/lot/")[-1].split("/")[0]
-        print(f"[{idx}/{total}] Тяну детали лота {lot_id_from_url}…")
-        try:
-            details = await bot.get_lot_details(url)
 
-            # определяем lot_id для ключей в S3
-            lot_number = details.get("lot_number") or lot_id_from_url
-            lot_id_str = str(lot_number)
+    async with httpx.AsyncClient(timeout=30) as client:
+        for idx, url in enumerate(links, start=1):
+            lot_id_from_url = url.split("/lot/")[-1].split("/")[0]
+            print(f"[{idx}/{total}] Тяну детали лота {lot_id_from_url}…")
+            try:
+                details = await bot.get_lot_details(url)
 
-            # исходные thumbnail'ы с Copart
-            thumbs: List[str] = details.get("images") or []
+                # определяем lot_id для ключей в S3
+                lot_number = details.get("lot_number") or lot_id_from_url
+                lot_id_str = str(lot_number)
 
-            # заливаем в S3 → получаем S3 small / hd
-            s3_small, s3_hd = await mirror_copart_images_to_s3(lot_id_str, thumbs)
+                # исходные thumbnail'ы с Copart
+                thumbs: List[str] = details.get("images") or []
 
-            # сохраняем S3-ссылки в деталях
-            details["images_small"] = s3_small
-            details["images_hd"] = s3_hd
-            # для совместимости: images = small, но уже S3
-            details["images"] = s3_small
+                # заливаем в S3 → получаем S3 small / hd (уже async + параллельно)
+                s3_small, s3_hd = await mirror_copart_images_to_s3(
+                    lot_id_str,
+                    thumbs,
+                    client=client,
+                )
 
-            results.append(details)
-        except Exception as e:
-            print(f"❌ Ошибка при разборе лота {lot_id_from_url}: {e}")
+                # сохраняем S3-ссылки в деталях
+                details["images_small"] = s3_small
+                details["images_hd"] = s3_hd
+                details["images"] = s3_small  # для совместимости
+
+                results.append(details)
+            except Exception as e:
+                print(f"❌ Ошибка при разборе лота {lot_id_from_url}: {e}")
+
     return results
-
 
 
 async def main():

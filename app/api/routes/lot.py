@@ -394,6 +394,7 @@ async def get_similar_lots(
                 "price": lot.price,
                 "reserve_price": lot.reserve_price,
                 "bid": lot.bid,
+                "current_bid": lot.current_bid,
                 "auction_date": lot.auction_date.isoformat() if lot.auction_date else None,
                 "cost_repair": lot.cost_repair,
                 "year": lot.year,
@@ -520,6 +521,7 @@ async def get_lots_by_price_range(
                 "price": lot.price,
                 "reserve_price": lot.reserve_price,
                 "bid": lot.bid,
+                "current_bid": lot.current_bid,
                 "auction_date": lot.auction_date.isoformat() if lot.auction_date else None,
                 "cost_repair": lot.cost_repair,
                 "year": lot.year,
@@ -819,8 +821,7 @@ async def get_history_car_by_vin(
     language: TransLiteral = "en"
 ):
     result = await generate_history_dropdown(cache, vin, is_historical, language)
-    # result — это уже dict со списком data: List[dict]
-    return JSONResponse(content=result)
+    return result
 
 
 @router.get("/testcache")

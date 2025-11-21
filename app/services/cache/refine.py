@@ -31,7 +31,7 @@ RANGE_PRICE = [
 ]
 
 SORT_BY = [
-    "auction_date", "price", "year", "odometer", "created_at", "bid", "reserve_price"
+    "auction_date", "price", "year", "odometer", "created_at", "bid", "current_bid", "reserve_price"
 ]
 
 def safe_serialize(data: Any) -> str:
