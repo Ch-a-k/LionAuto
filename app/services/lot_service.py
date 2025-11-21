@@ -14,7 +14,7 @@ from app.models import (Lot, BodyType, VehicleType, Make, Model, DamagePrimary, 
                         DocumentOld, BaseSite, LotOtherVehicle, LotBase, LotOtherVehicleHistorical,
                         Lot1, Lot2, Lot3, Lot4, Lot5, Lot6, Lot7)
 from app.schemas import (VehicleModel, SpecialFilterLiteral, LotHistoryItem, VehicleModelOther,
-                         VehicleModelResponse)
+                         VehicleModelResponse, TransLiteral)
 from datetime import datetime, timedelta, timezone, date, time
 import asyncio
 from app.services.translate_service import create_model_translations, get_translation
@@ -389,66 +389,160 @@ async def create_cache_for_catalog(cache,language,list_ids, list_vin, is_histori
     #         await cache.set(key, json.dumps(result), ttl=settings.CACHE_TTL)
 
 
-async def get_lot_by_id_from_database(id: int, language: str = "ru", is_historical: bool = False) -> Optional[dict]:
+async def get_lot_by_id_from_database(
+    id: int,
+    language: TransLiteral = "en",
+    is_historical: bool = False
+) -> Optional[Dict[str, Any]]:
     """
     Get lot from database with translations.
     Determines the correct table based on ID prefix.
-    
+
     Args:
-        id: Lot ID
-        language: Translation language
-    
+        id: internal lot ID (our PK, not copart lot_id)
+        language: translation language (e.g. 'en', 'ru', 'uk')
+        is_historical: optional hint, если нужно форсить historical
+
     Returns:
-        dict: Lot data with translations or None if not found
+        dict: lot data with translated reference names OR None if not found
     """
-    # Determine the model class based on ID prefix
+    # ---- 1. Определяем модель по префиксу ID ----
     prefix = id // 10_000_000
-    
-    # Map prefixes to model classes
+
     prefix_to_model = {
-        1: Lot,        # Main lots (will be routed to shards)
+        1: Lot,        # main logical lot, но физически Lot1..Lot7
         2: HistoricalLot,
         3: LotWithoutAuctionDate,
         4: LotWithouImage,
         5: LotHistoryAddons,
         6: LotOtherVehicle,
         7: LotOtherVehicleHistorical,
-        11: Lot1,      # Shards for main Lot
+        11: Lot1,
         12: Lot2,
         13: Lot3,
         14: Lot4,
         15: Lot5,
         16: Lot6,
-        17: Lot7
+        17: Lot7,
     }
-    
-    # Get the appropriate model class
+
     model_class = prefix_to_model.get(prefix)
-    
+
     if model_class is None:
-        # If prefix is unknown, try all tables
+        # Если префикс неизвестен — перебираем все таблицы
         model_classes = [
-            Lot, HistoricalLot, LotWithoutAuctionDate, 
-            LotWithouImage, LotHistoryAddons, 
+            Lot, HistoricalLot, LotWithoutAuctionDate,
+            LotWithouImage, LotHistoryAddons,
             LotOtherVehicle, LotOtherVehicleHistorical,
-            Lot1, Lot2, Lot3, Lot4, Lot5, Lot6, Lot7
+            Lot1, Lot2, Lot3, Lot4, Lot5, Lot6, Lot7,
         ]
     else:
         model_classes = [model_class]
-    
-    # Try to find the lot in the appropriate table(s)
+
+    # ---- 2. Ищем лот в подходящих таблицах ----
+    lot_orm = None
     for model in model_classes:
-        lot = await model.filter(id=id).prefetch_related(
+        lot_orm = await model.filter(id=id).prefetch_related(
             "vehicle_type", "make", "model", "series", "base_site",
             "damage_pr", "damage_sec", "keys", "odobrand", "fuel",
             "drive", "transmission", "color", "status", "auction_status",
-            "body_type", "title", "seller_type", "seller", "document", "document_old"
+            "body_type", "title", "seller_type", "seller", "document", "document_old",
         ).first()
-        
-        if lot is not None:
-            return lot
-    
-    return None
+
+        if lot_orm is not None:
+            break
+
+    if lot_orm is None:
+        return None
+
+    # ---- 3. Хелпер для справочных моделей + переводов ----
+    async def serialize_ref(obj, field_name: str) -> Optional[Dict[str, Any]]:
+        """
+        Превращает reference-модель (VehicleType, Make, ...) в dict
+        и подставляет перевод имени по slug.
+        field_name = имя поля, по которому храним переводы (damage_pr, fuel, ...)
+        """
+        if obj is None:
+            return None
+
+        data: Dict[str, Any] = {}
+
+        # Берём только реальные поля модели (из Tortoise)
+        for f_name in obj._meta.fields_map.keys():
+            data[f_name] = getattr(obj, f_name, None)
+
+        slug_val = data.get("slug")
+        if slug_val:
+            translated = await get_translation(
+                field_name=field_name,
+                original_value=slug_val,
+                language=language,
+            )
+            if translated:
+                data["name"] = translated
+
+        return data
+
+    # ---- 4. Основные поля лота (scalar-часть) ----
+    lot_dict: Dict[str, Any] = {
+        "id": lot_orm.id,
+        "lot_id": lot_orm.lot_id,
+        "odometer": lot_orm.odometer,
+        "price": lot_orm.price,
+        "reserve_price": lot_orm.reserve_price,
+        "bid": lot_orm.bid,
+        "current_bid": lot_orm.current_bid,
+        "auction_date": lot_orm.auction_date.isoformat() if lot_orm.auction_date else None,
+        "cost_repair": lot_orm.cost_repair,
+        "year": lot_orm.year,
+        "cylinders": lot_orm.cylinders,
+        "state": lot_orm.state,
+        "vin": lot_orm.vin,
+        "engine": lot_orm.engine,
+        "engine_size": lot_orm.engine_size,
+        "location": lot_orm.location,
+        "location_old": lot_orm.location_old,
+        "country": lot_orm.country,
+        "image_thubnail": lot_orm.image_thubnail,
+        "is_buynow": lot_orm.is_buynow,
+        "link_img_hd": lot_orm.link_img_hd,
+        "link_img_small": lot_orm.link_img_small,
+        "link": lot_orm.link,
+        "risk_index": lot_orm.risk_index,
+        "created_at": lot_orm.created_at.isoformat() if lot_orm.created_at else None,
+        "updated_at": lot_orm.updated_at.isoformat() if lot_orm.updated_at else None,
+        "is_historical": lot_orm.is_historical,
+    }
+
+    # ---- 5. Связанные справочники + переводы ----
+    related_map = {
+        "vehicle_type": lot_orm.vehicle_type,
+        "make": lot_orm.make,
+        "model": lot_orm.model,
+        "series": lot_orm.series,
+        "base_site": lot_orm.base_site,
+        "damage_pr": lot_orm.damage_pr,
+        "damage_sec": lot_orm.damage_sec,
+        "keys": lot_orm.keys,
+        "odobrand": lot_orm.odobrand,
+        "fuel": lot_orm.fuel,
+        "drive": lot_orm.drive,
+        "transmission": lot_orm.transmission,
+        "color": lot_orm.color,
+        "status": lot_orm.status,
+        "auction_status": lot_orm.auction_status,
+        "body_type": lot_orm.body_type,
+        "title": lot_orm.title,
+        "seller_type": lot_orm.seller_type,
+        "seller": lot_orm.seller,
+        "document": lot_orm.document,
+        "document_old": lot_orm.document_old,
+    }
+
+    for field_name, obj in related_map.items():
+        lot_dict[field_name] = await serialize_ref(obj, field_name)
+
+    return lot_dict
 
 
 async def serialize_lot(language, lot: Lot) -> Dict[str, Any]:

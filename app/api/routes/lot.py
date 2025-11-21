@@ -11,7 +11,7 @@ from app.services import (get_lot_by_lot_id_from_database, get_lot_by_id_from_da
                           search_lots, get_popular_brands_function, get_special_filtered_lots,
                           get_filtered_lots, create_cache_for_catalog, filter_copart_hd_images,
                           lot_to_dict, find_lots_by_price_range, generate_history_dropdown)
-from typing import List, Optional, Union
+from typing import List, Optional, Union, Dict, Any
 from app.models import HistoricalLot, Lot
 from app.services.translate_service import get_translation
 from aiocache import caches
@@ -352,49 +352,54 @@ async def create_batch_lots(lots: List[VehicleModel|VehicleModelOther]):
 async def get_similar_lots(
     id: int,
     language: TransLiteral = Query("en"),
-    limit: int = Query(5, description="Максимальное количество похожих лотов")
+    limit: int = Query(5, description="Максимальное количество похожих лотов"),
 ):
     try:
-        similar_lots = await find_similar_lots(original_lot_id=id, limit=limit)
-        
-        results = []
+        # ⛔ ВАЖНО: сюда приходит ВНУТРЕННИЙ id, и его же передаём в helper
+        similar_lots = await get_similar_lots_by_id(
+            id=id,
+            limit=limit,
+            language=language,
+        )
+
+        results: List[Dict[str, Any]] = []
+
         for lot in similar_lots:
-            # Явно загружаем все связанные данные
+            # Прогружаем связи
             await lot.fetch_related(
                 "vehicle_type", "make", "model", "series", "base_site",
                 "damage_pr", "damage_sec", "keys", "odobrand", "fuel",
                 "drive", "transmission", "color", "status", "auction_status",
-                "body_type", "title", "seller_type", "seller", "document", "document_old"
+                "body_type", "title", "seller_type", "seller", "document", "document_old",
             )
-            
-            # Функция для преобразования ORM объектов в словари с исключением служебных полей
+
+            # helper для reference-моделей
             def to_dict(obj):
                 if obj is None:
                     return None
-                if not hasattr(obj, "__dict__"):
+                if hasattr(obj, "_meta"):
+                    data = {}
+                    for field_name, field in obj._meta.fields_map.items():
+                        if field_name.startswith("_"):
+                            continue
+                        data[field_name] = getattr(obj, field_name, None)
+                    return data
+                if isinstance(obj, dict):
                     return obj
-                
-                # Исключаем служебные поля Tortoise ORM
-                exclude_fields = {
-                    "_partial", "_custom_generated_pk", "_await_when_save",
-                    "_saved_in_db", "_fetched", "_custom_generated", "_state",
-                    "vehicle_type_id", "make_id"
-                }
-                
                 return {
                     k: v for k, v in obj.__dict__.items()
-                    if k not in exclude_fields
+                    if not k.startswith("_")
                 }
-            
-            # Основные данные лота
-            lot_dict = {
+
+            # Основные поля лота
+            lot_dict: Dict[str, Any] = {
                 "id": lot.id,
                 "lot_id": lot.lot_id,
                 "odometer": lot.odometer,
                 "price": lot.price,
                 "reserve_price": lot.reserve_price,
                 "bid": lot.bid,
-                "current_bid": lot.current_bid,  # если нужно /100 – можно поменять
+                "current_bid": lot.current_bid,
                 "auction_date": lot.auction_date.isoformat() if lot.auction_date else None,
                 "cost_repair": lot.cost_repair,
                 "year": lot.year,
@@ -416,8 +421,8 @@ async def get_similar_lots(
                 "updated_at": lot.updated_at.isoformat() if lot.updated_at else None,
                 "is_historical": lot.is_historical,
             }
-            
-            # Добавляем связанные объекты
+
+            # Связаные модели + переводы
             related_fields = {
                 "vehicle_type": lot.vehicle_type,
                 "make": lot.make,
@@ -439,64 +444,55 @@ async def get_similar_lots(
                 "seller_type": lot.seller_type,
                 "seller": lot.seller,
                 "document": lot.document,
-                "document_old": lot.document_old
+                "document_old": lot.document_old,
             }
-            
-            # Преобразуем связанные объекты + переводим name
+
             for field_name, related_obj in related_fields.items():
                 if related_obj is not None:
-                    lot_dict[field_name] = to_dict(related_obj)
-                    slug_val = lot_dict[field_name].get("slug")
-                    if slug_val:
-                        translated_value = await get_translation(
-                            field_name=field_name,
-                            original_value=slug_val,
-                            language=language
-                        )
-                        if translated_value:
-                            lot_dict[field_name]["name"] = translated_value
+                    rel_dict = to_dict(related_obj)
+                    lot_dict[field_name] = rel_dict
+                    if isinstance(rel_dict, dict):
+                        slug_val = rel_dict.get("slug")
+                        if slug_val:
+                            translated_value = await get_translation(
+                                field_name=field_name,
+                                original_value=slug_val,
+                                language=language,
+                            )
+                            if translated_value:
+                                lot_dict[field_name]["name"] = translated_value
                 else:
                     lot_dict[field_name] = None
 
-            # ============================
-            # COPART — фильтрация HD фоток
-            # ============================
+            # COPART: чистим HD фотки
             try:
                 base_site_slug = None
-
-                # Пытаемся получить slug из сериализованного base_site
                 base_site_data = lot_dict.get("base_site")
                 if isinstance(base_site_data, dict):
                     base_site_slug = base_site_data.get("slug")
-
-                # Fallback: напрямую из ORM-объекта
                 if not base_site_slug and getattr(lot, "base_site", None) is not None:
                     base_site_slug = getattr(lot.base_site, "slug", None)
 
                 if base_site_slug == "copart":
-                    # Используем хелпер, который умеет и строку, и список
                     lot_dict["link_img_hd"] = filter_copart_hd_images(
                         lot_dict.get("link_img_hd")
                     )
-                    # Если нужно, можно так же отфильтровать и маленькие:
-                    # lot_dict["link_img_small"] = filter_copart_hd_images(
-                    #     lot_dict.get("link_img_small")
-                    # )
             except Exception as e:
-                # Не ломаем весь ответ, просто лог
                 print("ERROR processing copart HD images in /similar_lots:", e)
-            
-            # Удаляем None значения для необязательных полей
-            lot_dict = {k: v for k, v in lot_dict.items() if v is not None}
-            
-            results.append(lot_dict)
-        
+
+            # Можно подчистить None, если нужно
+            results.append({k: v for k, v in lot_dict.items() if v is not None})
+
         return results
-        
+
     except ValueError as e:
+        # если исходный лот не найден
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Internal server error: {str(e)}",
+        )
 
 
 @router.get("/lots_by_price")
@@ -800,7 +796,7 @@ async def get_lot_by_id(
         if cached_result:
             result_dict = json.loads(cached_result)
             return result_dict
-        lot = await get_similar_lots_by_id(id, language, is_historical)
+        lot = await get_lot_by_id_from_database(id, language, is_historical)
         if not lot:
             raise HTTPException(status_code=404, detail="Лот не найден")
 
