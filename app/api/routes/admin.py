@@ -2,7 +2,7 @@ from fastapi import APIRouter, Query, HTTPException, File, UploadFile, Form, Dep
 from math import ceil
 from app.models import Lot, HistoricalLot, Translation, LanguageEnum, Status, VehicleType, Make, Color, LotWithoutAuctionDate
 from app.schemas import TransLiteral, TranslationUpdateRequest
-from app.services import serialize_lot, get_count_lot
+from app.services import serialize_lot, get_count_lot, get_lot_by_id_from_database
 from loguru import logger
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Union
@@ -23,7 +23,7 @@ router = APIRouter()
 @router.get("/get_catalog")
 async def get_lots_catalog(
     page: int = Query(1, ge=1, description="Номер страницы, начиная с 1"),
-    per_page: int = Query(20, ge=1, le=100, description="Количество элементов на странице (1-100)"),
+    per_page: int = Query(20, ge=1, le=100, description="Количество элементов на странице (1–100)"),
     is_historical: bool = Query(False),
     language: TransLiteral | None = Query(None),
 ):
@@ -35,6 +35,8 @@ async def get_lots_catalog(
     - для исторических: по таблице HistoricalLot через historical_count / historical_query_with_limit_offset
     """
     try:
+        lang = language or "en"
+
         # ---------- 1. Считаем общее количество ----------
         if is_historical:
             # Исторические – отдельная таблица без шардов
@@ -43,7 +45,6 @@ async def get_lots_catalog(
             # Актуальные – по всем шард-таблицам Lot1..Lot7
             total = await Lot.count_across_shards()
 
-        # Общее количество страниц
         total_pages = ceil(total / per_page) if total > 0 else 0
 
         # Если вообще нет данных
@@ -56,7 +57,7 @@ async def get_lots_catalog(
                 "total_pages": 0,
             }
 
-        # Проверяем, что запрашиваемая страница существует
+        # Проверяем, что запрошенная страница существует
         if page > total_pages:
             raise HTTPException(status_code=404, detail="Страница не найдена")
 
@@ -64,7 +65,7 @@ async def get_lots_catalog(
         offset = (page - 1) * per_page
 
         if is_historical:
-            # Исторические – собственные хелперы
+            # Исторические – свои хелперы
             lots = await HistoricalLot.historical_query_with_limit_offset(
                 limit=per_page,
                 offset=offset,
@@ -76,12 +77,21 @@ async def get_lots_catalog(
                 offset=offset,
             )
 
-        # ---------- 3. Сериализация + переводы ----------
-        # serialize_lot сам уже должен уметь переводить справочники по language
-        formatted_lots = [await serialize_lot(language, lot) for lot in lots]
+        # ---------- 3. Сериализация через get_lot_by_id_from_database ----------
+        items: list[dict] = []
+
+        for lot in lots:
+            # тут lot – ORM-объект (Lot1..Lot7 или HistoricalLot)
+            lot_data = await get_lot_by_id_from_database(
+                id=lot.id,
+                language=lang,
+                is_historical=is_historical,
+            )
+            if lot_data:
+                items.append(lot_data)
 
         return {
-            "items": formatted_lots,
+            "items": items,
             "total": total,
             "page": page,
             "per_page": per_page,
