@@ -1,6 +1,6 @@
 from .lot_service import (get_filtered_lots, add_lot,
                            get_lot_by_lot_id_from_database, get_lot_by_id_from_database,
-                           find_similar_lots, get_lots_by_ids, get_lots_count_by_vehicle_type,
+                           get_similar_lots_by_id, get_lots_by_ids, get_lots_count_by_vehicle_type,
                            search_lots, serialize_lot, get_popular_brands_function,
                            get_special_filtered_lots, fetch_vin_data, get_relation_stats, lot_to_dict, 
                            find_lots_by_price_range, delete_lot, filter_copart_hd_images,

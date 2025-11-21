@@ -25,49 +25,73 @@ async def get_lots_catalog(
     page: int = Query(1, ge=1, description="Номер страницы, начиная с 1"),
     per_page: int = Query(20, ge=1, le=100, description="Количество элементов на странице (1-100)"),
     is_historical: bool = Query(False),
-    language: TransLiteral = Query(None)
+    language: TransLiteral | None = Query(None),
 ):
     """
-    Получение каталога лотов с пагинацией (Tortoise ORM + PostgreSQL)
-    
-    Параметры:
-    - page: номер страницы (начинается с 1)
-    - per_page: количество элементов на странице (1-100)
+    Получение каталога лотов с пагинацией.
+
+    Работает:
+    - для актуальных лотов: по ВСЕМ шарам Lot1..Lot7 через Lot.count_across_shards / Lot.query_across_shards_with_limit_offset
+    - для исторических: по таблице HistoricalLot через historical_count / historical_query_with_limit_offset
     """
     try:
-        # Получаем общее количество лотов
-        total = await Lot.all().count()
-        
-        # Вычисляем общее количество страниц
+        # ---------- 1. Считаем общее количество ----------
+        if is_historical:
+            # Исторические – отдельная таблица без шардов
+            total = await HistoricalLot.historical_count()
+        else:
+            # Актуальные – по всем шард-таблицам Lot1..Lot7
+            total = await Lot.count_across_shards()
+
+        # Общее количество страниц
         total_pages = ceil(total / per_page) if total > 0 else 0
-        
+
+        # Если вообще нет данных
+        if total == 0:
+            return {
+                "items": [],
+                "total": 0,
+                "page": page,
+                "per_page": per_page,
+                "total_pages": 0,
+            }
+
         # Проверяем, что запрашиваемая страница существует
-        if page > total_pages and total_pages > 0:
+        if page > total_pages:
             raise HTTPException(status_code=404, detail="Страница не найдена")
-        
-        # Вычисляем смещение и получаем данные
+
+        # ---------- 2. Offset/limit ----------
         offset = (page - 1) * per_page
-        LotModel = HistoricalLot if is_historical else Lot
-        lots = await LotModel.all().prefetch_related(
-            "vehicle_type", "make", "model", "series", "base_site",
-            "damage_pr", "damage_sec", "keys", "odobrand", "fuel",
-            "drive", "transmission", "color", "status", "auction_status",
-            "body_type", "title", "seller_type", "seller", "document", "document_old"
-        ).offset(offset).limit(per_page)
-        
-        # Сериализуем данные лотов
-        formatted_lots = [await serialize_lot(language,lot) for lot in lots]
-        
+
+        if is_historical:
+            # Исторические – собственные хелперы
+            lots = await HistoricalLot.historical_query_with_limit_offset(
+                limit=per_page,
+                offset=offset,
+            )
+        else:
+            # Актуальные – шардированные Lot1..Lot7
+            lots = await Lot.query_across_shards_with_limit_offset(
+                limit=per_page,
+                offset=offset,
+            )
+
+        # ---------- 3. Сериализация + переводы ----------
+        # serialize_lot сам уже должен уметь переводить справочники по language
+        formatted_lots = [await serialize_lot(language, lot) for lot in lots]
+
         return {
             "items": formatted_lots,
             "total": total,
             "page": page,
             "per_page": per_page,
-            "total_pages": total_pages
+            "total_pages": total_pages,
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
     
 
 @router.get("/translations")
