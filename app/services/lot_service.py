@@ -2757,24 +2757,65 @@ async def lot_to_dict(language, lot) -> Dict:
                 field_name=field, 
                 original_value=related_obj.slug, 
                 language=language
-                )
+            )
             if translated_value:
                 result[f"{field}_name"] = translated_value
             else:
                 result[f"{field}_name"] = related_obj.name
+
             result[f"{field}_slug"] = related_obj.slug
-            if field == "color" and hasattr(related_obj, 'hex'):
+
+            if field == "color" and hasattr(related_obj, "hex"):
                 result["hex"] = related_obj.hex
-            if field == "status" and hasattr(related_obj, 'hex'):
+
+            if field == "status" and hasattr(related_obj, "hex"):
                 result["hex"] = related_obj.hex
                 result["letter"] = related_obj.letter
                 result["description"] = related_obj.description
-            if field == "make" and hasattr(related_obj, 'icon_path'):
+
+            if field == "make" and hasattr(related_obj, "icon_path"):
                 result["icon_path"] = related_obj.icon_path
                 result["popular_counter"] = related_obj.popular_counter
         else:
             result[f"{field}_name"] = None
             result[f"{field}_slug"] = None
+
+    # ============================
+    # COPART — фильтрация HD фоток
+    # ============================
+    try:
+        # пытаемся взять slug из result, либо напрямую из lot.base_site
+        base_site_slug = result.get("base_site_slug")
+        if not base_site_slug:
+            base_site = getattr(lot, "base_site", None)
+            if base_site is not None and getattr(base_site, "slug", None):
+                base_site_slug = base_site.slug
+
+        link_img_hd = result.get("link_img_hd")
+
+        # Проверяем, что это Copart и что у нас есть строка с HD-ссылкой
+        if base_site_slug == "copart" and isinstance(link_img_hd, str) and link_img_hd:
+            # Пример: fadder/copart/71256375/hd/009.jpg
+            parts = link_img_hd.split("/")
+            if len(parts) >= 2:
+                filename = parts[-1]  # 009.jpg
+                prefix = "/".join(parts[:-1])  # fadder/copart/71256375/hd
+
+                if "." in filename:
+                    name_part, ext = filename.rsplit(".", 1)
+                else:
+                    name_part, ext = filename, ""
+
+                allowed_numbers = ["000", "002", "004", "006", "008"]
+
+                if ext:
+                    result["link_img_hd"] = [f"{prefix}/{num}.{ext}" for num in allowed_numbers]
+                else:
+                    result["link_img_hd"] = [f"{prefix}/{num}" for num in allowed_numbers]
+    except Exception as e:
+        # Чтобы не ломать API, просто логируем в stdout
+        print("ERROR processing copart HD images:", e)
+
     return result
 
 
