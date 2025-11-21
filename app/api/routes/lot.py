@@ -12,7 +12,7 @@ from app.services import (get_lot_by_lot_id_from_database, get_lot_by_id_from_da
                           get_filtered_lots, create_cache_for_catalog, filter_copart_hd_images,
                           lot_to_dict, find_lots_by_price_range, generate_history_dropdown, json_safe)
 from typing import List, Optional, Union, Dict, Any
-from app.models import HistoricalLot, Lot
+from app.models import HistoricalLot, Lot, LotBase
 from app.services.translate_service import get_translation
 from aiocache import caches
 from loguru import logger
@@ -354,133 +354,54 @@ async def get_similar_lots(
     language: TransLiteral = Query("en"),
     limit: int = Query(5, description="Максимальное количество похожих лотов"),
 ):
+    """
+    Возвращает список похожих лотов по ВНУТРЕННЕМУ id исходного лота.
+
+    ВАЖНО:
+    - get_similar_lots_by_id → возвращает ORM-объекты (Lot1..Lot7 / HistoricalLot / LotOtherVehicle).
+    - Здесь мы НЕ сериализуем их руками, а вызываем
+      get_lot_by_id_from_database(lot.id, language, is_historical),
+      которая уже умеет:
+        * безопасно собирать dict
+        * делать переводы
+        * не класть внутрь ORM/ReverseRelation/методы.
+    """
     try:
-        similar_lots = await get_similar_lots_by_id(
+        # 1. Находим похожие лоты как ORM-объекты
+        similar_lots_orm: List[LotBase] = await get_similar_lots_by_id(
             lot_id=id,
             limit=limit,
             language=language,
         )
 
+        if not similar_lots_orm:
+            return []
+
         results: List[Dict[str, Any]] = []
 
-        for lot in similar_lots:
-            # Прогружаем связи
-            await lot.fetch_related(
-                "vehicle_type", "make", "model", "series", "base_site",
-                "damage_pr", "damage_sec", "keys", "odobrand", "fuel",
-                "drive", "transmission", "color", "status", "auction_status",
-                "body_type", "title", "seller_type", "seller", "document", "document_old",
+        # 2. Для каждого похожего лота берём уже ГОТОВЫЙ dict из get_lot_by_id_from_database
+        for lot in similar_lots_orm:
+            lot_dict = await get_lot_by_id_from_database(
+                id=lot.id,
+                language=language,
+                is_historical=getattr(lot, "is_historical", False),
             )
 
-            # helper для reference-моделей
-            def to_dict(obj):
-                if obj is None:
-                    return None
-                if hasattr(obj, "_meta"):
-                    data = {}
-                    for field_name, field in obj._meta.fields_map.items():
-                        if field_name.startswith("_"):
-                            continue
-                        data[field_name] = getattr(obj, field_name, None)
-                    return data
-                if isinstance(obj, dict):
-                    return obj
-                return {
-                    k: v for k, v in obj.__dict__.items()
-                    if not k.startswith("_")
-                }
+            if not lot_dict:
+                continue
 
-            # Основные поля лота
-            lot_dict: Dict[str, Any] = {
-                "id": lot.id,
-                "lot_id": lot.lot_id,
-                "odometer": lot.odometer,
-                "price": lot.price,
-                "reserve_price": lot.reserve_price,
-                "bid": lot.bid,
-                "current_bid": lot.current_bid,
-                "auction_date": lot.auction_date.isoformat() if lot.auction_date else None,
-                "cost_repair": lot.cost_repair,
-                "year": lot.year,
-                "cylinders": lot.cylinders,
-                "state": lot.state,
-                "vin": lot.vin,
-                "engine": lot.engine,
-                "engine_size": lot.engine_size,
-                "location": lot.location,
-                "location_old": lot.location_old,
-                "country": lot.country,
-                "image_thubnail": lot.image_thubnail,
-                "is_buynow": lot.is_buynow,
-                "link_img_hd": lot.link_img_hd,
-                "link_img_small": lot.link_img_small,
-                "link": lot.link,
-                "risk_index": lot.risk_index,
-                "created_at": lot.created_at.isoformat() if lot.created_at else None,
-                "updated_at": lot.updated_at.isoformat() if lot.updated_at else None,
-                "is_historical": lot.is_historical,
-            }
-
-            # Связаные модели + переводы
-            related_fields = {
-                "vehicle_type": lot.vehicle_type,
-                "make": lot.make,
-                "model": lot.model,
-                "series": lot.series,
-                "base_site": lot.base_site,
-                "damage_pr": lot.damage_pr,
-                "damage_sec": lot.damage_sec,
-                "keys": lot.keys,
-                "odobrand": lot.odobrand,
-                "fuel": lot.fuel,
-                "drive": lot.drive,
-                "transmission": lot.transmission,
-                "color": lot.color,
-                "status": lot.status,
-                "auction_status": lot.auction_status,
-                "body_type": lot.body_type,
-                "title": lot.title,
-                "seller_type": lot.seller_type,
-                "seller": lot.seller,
-                "document": lot.document,
-                "document_old": lot.document_old,
-            }
-
-            for field_name, related_obj in related_fields.items():
-                if related_obj is not None:
-                    rel_dict = to_dict(related_obj)
-                    lot_dict[field_name] = rel_dict
-                    if isinstance(rel_dict, dict):
-                        slug_val = rel_dict.get("slug")
-                        if slug_val:
-                            translated_value = await get_translation(
-                                field_name=field_name,
-                                original_value=slug_val,
-                                language=language,
-                            )
-                            if translated_value:
-                                lot_dict[field_name]["name"] = translated_value
-                else:
-                    lot_dict[field_name] = None
-
-            # COPART: чистим HD фотки
+            # 3. Доп. обработка для Copart (фильтр HD картинок), если нужно
             try:
-                base_site_slug = None
-                base_site_data = lot_dict.get("base_site")
-                if isinstance(base_site_data, dict):
-                    base_site_slug = base_site_data.get("slug")
-                if not base_site_slug and getattr(lot, "base_site", None) is not None:
-                    base_site_slug = getattr(lot.base_site, "slug", None)
-
-                if base_site_slug == "copart":
+                base_site = lot_dict.get("base_site")
+                if isinstance(base_site, dict) and base_site.get("slug") == "copart":
                     lot_dict["link_img_hd"] = filter_copart_hd_images(
                         lot_dict.get("link_img_hd")
                     )
             except Exception as e:
-                print("ERROR processing copart HD images in /similar_lots:", e)
+                # не ломаем весь ответ, просто игнорим
+                print(f"ERROR processing copart HD images in /similar_lots: {e}")
 
-            # Можно подчистить None, если нужно
-            results.append({k: v for k, v in lot_dict.items() if v is not None})
+            results.append(lot_dict)
 
         return results
 
