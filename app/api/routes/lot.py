@@ -355,9 +355,8 @@ async def get_similar_lots(
     limit: int = Query(5, description="Максимальное количество похожих лотов"),
 ):
     try:
-        # ⛔ ВАЖНО: сюда приходит ВНУТРЕННИЙ id, и его же передаём в helper
         similar_lots = await get_similar_lots_by_id(
-            id=id,
+            lot_id=id,
             limit=limit,
             language=language,
         )
@@ -777,40 +776,59 @@ async def move_lot_from_id(
 
 @router.get("/id/{id}")
 async def get_lot_by_id(
-    id: int, 
+    id: int,
     is_historical: bool = Query(False),
-    language: TransLiteral = Query(None)
+    language: TransLiteral = Query("en")
 ):
     """
-    Получает информацию о лоте по его уникальному идентификатору (id).
+    Получает информацию о лоте по его внутреннему ID (PK с префиксом).
 
-    Аргументы:
-        id (int): Идентификатор лота.
-        language (str, по умолчанию None): Язык для перевода данных.
-
-    Возвращает:
-        VehicleModelResponse: Ответ с данными о лоте.
+    Args:
+        id: внутренний ID лота (pk, с префиксом 1x / 2x / 11-17)
+        is_historical: подсказка, если хотим искать именно в исторических
+        language: язык перевода справочников
     """
     try:
-        cached_result = await cache.get(f"{settings.CACHE_KEY}_lot_{id}{language}")
+        # аккуратный cache_key с учётом языка и флага истории
+        cache_key = f"{settings.CACHE_KEY}_lot_{id}_{language}_{'hist' if is_historical else 'cur'}"
+
+        cached_result = await cache.get(cache_key)
         if cached_result:
-            result_dict = json.loads(cached_result)
-            return result_dict
-        lot = await get_lot_by_id_from_database(id, language, is_historical)
-        if not lot:
+            return json.loads(cached_result)
+
+        # ⚠️ get_lot_by_id_from_database УЖЕ возвращает dict с переводами
+        lot_dict = await get_lot_by_id_from_database(
+            id=id,
+            language=language,
+            is_historical=is_historical,
+        )
+
+        if not lot_dict:
             raise HTTPException(status_code=404, detail="Лот не найден")
 
-        # Преобразуем лот в словарь
-        lot_dict = await serialize_lot(language,lot)
-        
-        # Применяем перевод, если нужно
-        # if language != "en":
-            # lot_dict = await translate_lot_fields(lot_dict, language)
-            
+        # Если нужно, здесь можно добавить доп. постобработку (например, copart hd-фильтр):
+        # try:
+        #     base_site = lot_dict.get("base_site") or {}
+        #     if isinstance(base_site, dict) and base_site.get("slug") == "copart":
+        #         lot_dict["link_img_hd"] = filter_copart_hd_images(
+        #             lot_dict.get("link_img_hd")
+        #         )
+        # except Exception as e:
+        #     logger.error(f"Error processing copart images for lot {id}: {e}")
+
+        # Кладём в кеш
+        await cache.set(cache_key, json.dumps(lot_dict))
+
         return lot_dict
-        
+
+    except HTTPException:
+        # пробрасываем как есть (404 и т.п.)
+        raise
     except Exception as e:
+        # лог можно добавить, если хочешь
+        # logger.exception(f"Error in /lot/id/{id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
 
 
 @router.get("/lot_id/{lot_id}")
