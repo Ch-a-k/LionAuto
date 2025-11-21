@@ -12,7 +12,7 @@ from app.models import (Lot, BodyType, VehicleType, Make, Model, DamagePrimary, 
                         HistoricalLot, LotWithouImage, LotHistoryAddons,
                         LotWithoutAuctionDate, Series, Seller, SellerType, Title, Document,
                         DocumentOld, BaseSite, LotOtherVehicle, LotBase, LotOtherVehicleHistorical,
-                        Lot1, Lot2, Lot3, Lot4, Lot5, Lot6, Lot7)
+                        Lot1, Lot2, Lot3, Lot4, Lot5, Lot6, Lot7, LotRouter)
 from app.schemas import (VehicleModel, SpecialFilterLiteral, LotHistoryItem, VehicleModelOther,
                          VehicleModelResponse)
 from datetime import datetime, timedelta, timezone, date, time
@@ -1614,120 +1614,182 @@ async def find_lots_by_price_range(
     }
 
 
-async def find_similar_lots(original_lot_id: int, limit: int = 5) -> List[Lot]:
+async def find_similar_lots(original_lot_id: int, limit: int = 5) -> List[LotBase]:
     """
-    Находит похожие лоты на основе характеристик исходного лота.
-    Загружает все связанные данные для каждого лота.
-    Похожие лоты берутся с того же аукциона (base_site), что и исходный лот.
+    Находит похожие лоты по ID исходного лота.
+    - Оригинальный лот ищется через LotRouter.get_lot() в нужном шарде.
+    - Для обычных авто ищем по всем шардам Lot1..Lot7.
+    - Для LotOtherVehicle ищем в LotOtherVehicle.
     """
-    if str(original_lot_id).startswith("6"):
-        original_lot = await LotOtherVehicle.filter(id=original_lot_id).prefetch_related(
-            "vehicle_type", "make", "model", "series", "base_site", 
-            "damage_pr", "damage_sec", "keys", "odobrand", "fuel", 
-            "drive", "transmission", "color", "status", "auction_status", 
-            "body_type", "title", "seller_type", "seller", "document", "document_old"
-        ).first()
-        if not original_lot:
-            raise ValueError(f"Лот с ID {original_lot_id} не найден")
 
-        # Базовый запрос с предзагрузкой всех связей и фильтрацией по base_site
-        query = LotOtherVehicle.filter(
-            ~Q(id=original_lot_id),
-            base_site_id=original_lot.base_site_id  # Фильтруем только лоты с того же аукциона
-        ).prefetch_related(
-            "vehicle_type", "make", "model", "series", "base_site", 
-            "damage_pr", "damage_sec", "keys", "odobrand", "fuel", 
-            "drive", "transmission", "color", "status", "auction_status", 
+    # ---------- 1. Определяем тип и вытаскиваем исходный лот ----------
+    # По префиксу ID понимаем тип
+    shard_class = LotRouter.get_shard_class(original_lot_id)
+
+    is_other_vehicle_type = shard_class in (LotOtherVehicle, LotOtherVehicleHistorical)
+
+    if is_other_vehicle_type:
+        # Ищем исходный лот среди LotOtherVehicle/LotOtherVehicleHistorical
+        original_lot = await LotRouter.get_lot(original_lot_id)
+        if not original_lot:
+            raise ValueError(f"Лот с ID {original_lot_id} не найден в LotOtherVehicle/LotOtherVehicleHistorical")
+
+        await original_lot.fetch_related(
+            "vehicle_type", "make", "model", "series", "base_site",
+            "damage_pr", "damage_sec", "keys", "odobrand", "fuel",
+            "drive", "transmission", "color", "status", "auction_status",
             "body_type", "title", "seller_type", "seller", "document", "document_old"
         )
+
+        # Для других ТС — работаем только с LotOtherVehicle
+        base_qs = LotOtherVehicle.filter(
+            ~Q(id=original_lot.id),
+            base_site_id=original_lot.base_site_id
+        )
+        shard_classes = [LotOtherVehicle]
+
     else:
-
-        # Получаем исходный лот с предзагрузкой всех связанных моделей
-        original_lot = await Lot1.filter(id=original_lot_id).prefetch_related(
-            "vehicle_type", "make", "model", "series", "base_site", 
-            "damage_pr", "damage_sec", "keys", "odobrand", "fuel", 
-            "drive", "transmission", "color", "status", "auction_status", 
-            "body_type", "title", "seller_type", "seller", "document", "document_old"
-        ).first()
-        
+        # Обычный автомобильный лот
+        original_lot = await LotRouter.get_lot(original_lot_id)
         if not original_lot:
-            raise ValueError(f"Лот с ID {original_lot_id} не найден")
+            raise ValueError(f"Лот с ID {original_lot_id} не найден ни в одном шарде Lot1..Lot7/исторических")
 
-        # Базовый запрос с предзагрузкой всех связей и фильтрацией по base_site
-        query = Lot1.filter(
-            ~Q(id=original_lot_id),
-            base_site_id=original_lot.base_site_id  # Фильтруем только лоты с того же аукциона
-        ).prefetch_related(
-            "vehicle_type", "make", "model", "series", "base_site", 
-            "damage_pr", "damage_sec", "keys", "odobrand", "fuel", 
-            "drive", "transmission", "color", "status", "auction_status", 
+        await original_lot.fetch_related(
+            "vehicle_type", "make", "model", "series", "base_site",
+            "damage_pr", "damage_sec", "keys", "odobrand", "fuel",
+            "drive", "transmission", "color", "status", "auction_status",
             "body_type", "title", "seller_type", "seller", "document", "document_old"
         )
 
-    # Критерии схожести
-    similar_criteria = [
-        # 1. Совпадение марки и модели
-        Q(make_id=original_lot.make_id) & Q(model_id=original_lot.model_id),
-        
-        # 2. Совпадение марки + близкий год выпуска
-        Q(make_id=original_lot.make_id) & Q(year__gte=original_lot.year - 2) & Q(year__lte=original_lot.year + 2),
-        
-        # 3. Совпадение типа кузова + марка + близкая цена
-        Q(body_type_id=original_lot.body_type_id) & Q(make_id=original_lot.make_id) & 
-        Q(price__gte=original_lot.price * 0.7 if original_lot.price else None) & 
-        Q(price__lte=original_lot.price * 1.3 if original_lot.price else None),
-        
-        # 4. Совпадение типа транспортного средства + год + пробег
-        Q(vehicle_type_id=original_lot.vehicle_type_id) & 
-        Q(year__gte=original_lot.year - 3) & Q(year__lte=original_lot.year + 3) &
-        Q(odometer__gte=original_lot.odometer * 0.7 if original_lot.odometer else None) & 
-        Q(odometer__lte=original_lot.odometer * 1.3 if original_lot.odometer else None),
-        
-        # 5. Близкие характеристики без совпадения марки
-        Q(year__gte=original_lot.year - 1) & Q(year__lte=original_lot.year + 1) &
-        Q(price__gte=original_lot.price * 0.8 if original_lot.price else None) & 
-        Q(price__lte=original_lot.price * 1.2 if original_lot.price else None) &
-        Q(odometer__gte=original_lot.odometer * 0.8 if original_lot.odometer else None) & 
-        Q(odometer__lte=original_lot.odometer * 1.2 if original_lot.odometer else None)
-    ]
+        # Ищем среди активных авто по всем шардам Lot1..Lot7
+        shard_classes = await Lot.get_all_shards()
+        base_qs = None  # будем строить на уровне каждого шарда
 
-    similar_lots = []
-    for criteria in similar_criteria:
+    # ---------- 2. Собираем критерии схожести безопасно (без None в диапазонах) ----------
+    criteria_list: List[Q] = []
+
+    # 1) Совпадение марки и модели
+    if original_lot.make_id and original_lot.model_id:
+        criteria_list.append(
+            Q(make_id=original_lot.make_id) & Q(model_id=original_lot.model_id)
+        )
+
+    # 2) Марка + близкий год
+    if original_lot.make_id and original_lot.year:
+        criteria_list.append(
+            Q(make_id=original_lot.make_id) &
+            Q(year__gte=original_lot.year - 2) &
+            Q(year__lte=original_lot.year + 2)
+        )
+
+    # 3) Тип кузова + марка + близкая цена
+    if original_lot.body_type_id and original_lot.make_id and original_lot.price:
+        criteria_list.append(
+            Q(body_type_id=original_lot.body_type_id) &
+            Q(make_id=original_lot.make_id) &
+            Q(price__gte=original_lot.price * 0.7) &
+            Q(price__lte=original_lot.price * 1.3)
+        )
+
+    # 4) Тип ТС + год + пробег
+    if original_lot.vehicle_type_id and original_lot.year and original_lot.odometer:
+        criteria_list.append(
+            Q(vehicle_type_id=original_lot.vehicle_type_id) &
+            Q(year__gte=original_lot.year - 3) &
+            Q(year__lte=original_lot.year + 3) &
+            Q(odometer__gte=original_lot.odometer * 0.7) &
+            Q(odometer__lte=original_lot.odometer * 1.3)
+        )
+
+    # 5) Год + цена + пробег без учёта марки
+    if original_lot.year and original_lot.price and original_lot.odometer:
+        criteria_list.append(
+            Q(year__gte=original_lot.year - 1) &
+            Q(year__lte=original_lot.year + 1) &
+            Q(price__gte=original_lot.price * 0.8) &
+            Q(price__lte=original_lot.price * 1.2) &
+            Q(odometer__gte=original_lot.odometer * 0.8) &
+            Q(odometer__lte=original_lot.odometer * 1.2)
+        )
+
+    # ---------- 3. Хелпер: запрос по всем шардам ----------
+    async def fetch_from_all_shards(criteria: Q, max_needed: int) -> List[LotBase]:
+        """
+        Пробегает по всем shard_classes (Lot1..Lot7 или только LotOtherVehicle) и
+        собирает до max_needed лотов, удовлетворяющих criteria.
+        """
+        found: List[LotBase] = []
+
+        for shard in shard_classes:
+            if len(found) >= max_needed:
+                break
+
+            if is_other_vehicle_type:
+                # LotOtherVehicle — уже есть base_qs
+                qs = base_qs.filter(criteria)
+            else:
+                # Обычные авто — фильтруем по base_site на каждом шарде
+                qs = shard.filter(
+                    ~Q(id=original_lot.id),
+                    base_site_id=original_lot.base_site_id
+                ).filter(criteria)
+
+            qs = qs.prefetch_related(
+                "vehicle_type", "make", "model", "series", "base_site",
+                "damage_pr", "damage_sec", "keys", "odobrand", "fuel",
+                "drive", "transmission", "color", "status", "auction_status",
+                "body_type", "title", "seller_type", "seller", "document", "document_old"
+            ).limit(max_needed - len(found))
+
+            shard_lots = await qs
+            found.extend(shard_lots)
+
+        return found
+
+    # ---------- 4. Набираем похожие лоты по критериям ----------
+    similar_lots: List[LotBase] = []
+
+    for criteria in criteria_list:
         if len(similar_lots) >= limit:
             break
-            
-        current_lots = await query.filter(criteria).limit(limit - len(similar_lots)).all()
-        for lot in current_lots:
-            if lot.id not in [l.id for l in similar_lots]:
-                similar_lots.append(lot)
-                if len(similar_lots) >= limit:
-                    break
 
-    # Если не набрали достаточно лотов, добавляем дополнительные с того же аукциона
-    if len(similar_lots) < limit:
         remaining = limit - len(similar_lots)
-        additional_lots = await query.filter(
-            Q(year__gte=original_lot.year - 5) & Q(year__lte=original_lot.year + 5),
-            Q(price__gte=original_lot.price * 0.5 if original_lot.price else None) & 
-            Q(price__lte=original_lot.price * 1.5 if original_lot.price else None)
-        ).limit(remaining).all()
-        
-        for lot in additional_lots:
-            if lot.id not in [l.id for l in similar_lots]:
+        current = await fetch_from_all_shards(criteria, remaining)
+
+        for lot in current:
+            # Чтобы не было дублей
+            if lot.id != original_lot.id and lot.id not in {l.id for l in similar_lots}:
                 similar_lots.append(lot)
                 if len(similar_lots) >= limit:
                     break
 
-    # Сортируем по степени схожести
-    similar_lots.sort(
-        key=lambda x: (
-            0 if x.make_id == original_lot.make_id and x.model_id == original_lot.model_id else 1,
+    # ---------- 5. Если мало — добираем по более широким рамкам ----------
+    if len(similar_lots) < limit and original_lot.year and original_lot.price:
+        remaining = limit - len(similar_lots)
+        extra_criteria = (
+            Q(year__gte=original_lot.year - 5) &
+            Q(year__lte=original_lot.year + 5) &
+            Q(price__gte=original_lot.price * 0.5) &
+            Q(price__lte=original_lot.price * 1.5)
+        )
+
+        extra = await fetch_from_all_shards(extra_criteria, remaining)
+        for lot in extra:
+            if lot.id != original_lot.id and lot.id not in {l.id for l in similar_lots}:
+                similar_lots.append(lot)
+                if len(similar_lots) >= limit:
+                    break
+
+    # ---------- 6. Сортируем по "близости" ----------
+    def distance_key(x: LotBase):
+        return (
+            0 if (x.make_id == original_lot.make_id and x.model_id == original_lot.model_id) else 1,
             abs(x.year - original_lot.year) if x.year and original_lot.year else 9999,
             abs(x.price - original_lot.price) if x.price and original_lot.price else 999999,
             abs(x.odometer - original_lot.odometer) if x.odometer and original_lot.odometer else 9999999,
         )
-    )
 
+    similar_lots.sort(key=distance_key)
     return similar_lots[:limit]
 
 
