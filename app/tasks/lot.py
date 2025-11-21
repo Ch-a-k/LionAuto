@@ -177,41 +177,63 @@ def process_batch_task(self, lots_data):
     async def process():
         await init_db()  # Инициализация подключения
         
+        total = len(lots_data)
+        
         for i, lot_data in enumerate(lots_data):
+            lot_result = None  # сюда положим результат add_lot
             try:
                 # Обновляем статус задачи
                 self.update_state(
                     state='PROGRESS',
                     meta={
                         'processed': i + 1,
-                        'total': len(lots_data),
+                        'total': total,
                         'current_vin': lot_data.get('vin')
                     }
                 )
                 
-                # Обработка лота (ТВОЯ ЛОГИКА)
-                lot = await add_lot(lot_data)
-                
+                # Обработка лота
+                lot_result = await add_lot(lot_data)
+
+                # add_lot мог вернуть None — считаем это ошибкой
+                if not lot_result:
+                    raise ValueError("add_lot returned None for VIN "
+                                     f"{lot_data.get('vin')}")
+
+                # lot_result — это dict {'id': ..., 'lot_id': ...}
                 results.append({
-                    'vin': lot_data['vin'],
+                    'vin': lot_data.get('vin'),
                     'status': 'success',
-                    'lot_id': lot.id
+                    'lot_id': lot_result.get('lot_id'),
+                    'id': lot_result.get('id'),
                 })
                 
             except Exception as e:
-                logger.error(f"Ошибка обработки лота {lot_data.get('vin')}: {e}")
+                # Логируем с максимально аккуратным доступом к данным
+                logger.error(
+                    f"Ошибка обработки лота {lot_data.get('vin')}: {e}",
+                    exc_info=True,
+                )
+
+                lot_id = None
+                db_id = None
+                if isinstance(lot_result, dict):
+                    lot_id = lot_result.get('lot_id')
+                    db_id = lot_result.get('id')
+
                 results.append({
-                    'vin': lot_data['vin'],
-                    'status': 'success',
-                    'lot_id': lot['lot_id'] if isinstance(lot, dict) else lot.id,
-                    'id': lot['id'] if isinstance(lot, dict) else lot.id
+                    'vin': lot_data.get('vin'),
+                    'status': 'failed',          # ✅ тут точно failed
+                    'lot_id': lot_id,
+                    'id': db_id,
+                    'error': str(e),
                 })
         
         return {
-            'processed': len(lots_data),
+            'processed': total,
             'success': sum(1 for r in results if r['status'] == 'success'),
             'failed': sum(1 for r in results if r['status'] == 'failed'),
-            'results': results
+            'results': results,
         }
     
     # Запускаем асинхронную обработку
@@ -224,6 +246,7 @@ def process_batch_task(self, lots_data):
     )
     
     return task_result
+
 
 @shared_task(
     autoretry_for=(Exception,),
