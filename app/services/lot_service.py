@@ -486,7 +486,7 @@ async def get_lot_by_id_from_database(
         "price": lot_orm.price,
         "reserve_price": lot_orm.reserve_price,
         "bid": lot_orm.bid,
-        "current_bid": lot_orm.current_bid,
+        "current_bid": lot_orm.current_bid/100,
         "auction_date": lot_orm.auction_date.isoformat() if lot_orm.auction_date else None,
         "cost_repair": lot_orm.cost_repair,
         "year": lot_orm.year,
