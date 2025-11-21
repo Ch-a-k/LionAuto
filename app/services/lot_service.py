@@ -252,39 +252,56 @@ async def delete_lot(lot_id: int) -> Optional[Dict[str, int]]:
 
 
 def _serialize_value(value: Any) -> Any:
-    # 1) awaitable → пробуем дождаться, но в generate_history_dropdown мы не await'им здесь,
-    #    поэтому просто на всякий случай защитимся от них строкой.
+    """
+    Аккуратно превращаем значение в JSON-safe вид:
+    - datetime -> ISO-строка
+    - awaitable -> строка с типом
+    - Enum / объекты с .value -> их value
+    - коллекции -> рекурсивно
+    - всё прочее -> str(...)
+    """
+    # awaitable (ленивые связи Tortoise и пр.)
     if inspect.isawaitable(value):
-        # вместо await value, чтобы не ломать логику — просто в строку
         return f"<awaitable:{value.__class__.__name__}>"
 
-    # 2) datetime → ISO-строка
+    # datetime
     if isinstance(value, datetime):
         return value.isoformat()
 
-    # 3) базовые типы
+    # коллекции
+    if isinstance(value, (list, tuple, set)):
+        return [_serialize_value(v) for v in value]
+
+    if isinstance(value, dict):
+        return {k: _serialize_value(v) for k, v in value.items()}
+
+    # примитивы
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
 
-    # 4) Enum-подобные (есть .value)
+    # Enum-подобные (есть .value)
     if hasattr(value, "value"):
         try:
             return _serialize_value(value.value)
         except Exception:
             return str(value)
 
-    # 5) всё остальное — в строку
+    # всё остальное — в строку
     return str(value)
 
 
 def serialize_lot_for_history(lot) -> Dict[str, Any]:
-    """Гарантированно JSON-safe dict по лоту."""
+    """
+    Гарантированно JSON-safe dict по лоту.
+    Здесь не оставляем моделей Tortoise, datetime, awaitable и т.п.
+    """
     auction_date = getattr(lot, "auction_date", None)
 
     base_site = getattr(lot, "base_site", None)
     color = getattr(lot, "color", None)
     seller = getattr(lot, "seller", None)
     seller_type = getattr(lot, "seller_type", None)
+    status_obj = getattr(lot, "status", None)
 
     return {
         "id": _serialize_value(getattr(lot, "id", None)),
@@ -297,7 +314,9 @@ def serialize_lot_for_history(lot) -> Dict[str, Any]:
         "bid": _serialize_value(getattr(lot, "bid", None)),
         "current_bid": _serialize_value(getattr(lot, "current_bid", None)),
         "final_bid": _serialize_value(getattr(lot, "bid", None)),
-        "status": _serialize_value(getattr(lot, "status", None)),
+        # тут важно: берём именно status.name, а не сырое lot.status,
+        # иначе получим _NoneAwaitable / ленивый объект
+        "status": _serialize_value(getattr(status_obj, "name", None) if status_obj else None),
         "color": _serialize_value(getattr(color, "name", None) if color else None),
         "seller": _serialize_value(getattr(seller, "name", None) if seller else None),
         "seller_type": _serialize_value(getattr(seller_type, "name", None) if seller_type else None),
@@ -305,7 +324,7 @@ def serialize_lot_for_history(lot) -> Dict[str, Any]:
     }
 
 
-async def generate_history_dropdown(cache, vin, is_historical, language):
+async def generate_history_dropdown(cache, vin: str, is_historical: bool, language: str):
     cache_key = f"{settings.CACHE_KEY}_vin_{vin}{language}"
     try:
         # 1) пробуем взять из кеша
@@ -330,7 +349,7 @@ async def generate_history_dropdown(cache, vin, is_historical, language):
         last_bid = data[0]["bid"] if data else 0
         last_auction_date = data[0]["auction_date"] if data else None
 
-        result = {
+        result: Dict[str, Any] = {
             "last_bid": last_bid,
             "last_auction_date": last_auction_date,
             "data": data,
@@ -345,7 +364,7 @@ async def generate_history_dropdown(cache, vin, is_historical, language):
         return result
 
     except Exception as e:
-        logger.error(f'Error in get history dropdown: {e}')
+        logger.error(f"Error in get history dropdown: {e}")
         return {
             "last_bid": 0,
             "last_auction_date": None,
@@ -1736,7 +1755,8 @@ async def search_lots(search_info: str) -> List[Union[Lot, HistoricalLot, LotWit
         prefetch_base_site,
         "seller_type",
         "color",
-        "seller"
+        "seller",
+        "status"
     ]
     
     if len(search_info) == 17 and search_info.isalnum():
