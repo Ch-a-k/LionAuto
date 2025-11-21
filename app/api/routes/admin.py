@@ -2,10 +2,10 @@ from fastapi import APIRouter, Query, HTTPException, File, UploadFile, Form, Dep
 from math import ceil
 from app.models import Lot, HistoricalLot, Translation, LanguageEnum, Status, VehicleType, Make, Color, LotWithoutAuctionDate
 from app.schemas import TransLiteral, TranslationUpdateRequest
-from app.services import serialize_lot, get_count_lot, get_lot_by_id_from_database
+from app.services import serialize_lot, get_count_lot, get_lot_by_id_from_database, json_safe
 from loguru import logger
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Union, Any
 from datetime import datetime, timedelta
 from tortoise.functions import Count
 from tortoise.exceptions import DoesNotExist
@@ -20,6 +20,7 @@ import io
 
 router = APIRouter()
 
+
 @router.get("/get_catalog")
 async def get_lots_catalog(
     page: int = Query(1, ge=1, description="Номер страницы, начиная с 1"),
@@ -30,67 +31,60 @@ async def get_lots_catalog(
     """
     Получение каталога лотов с пагинацией.
 
-    Работает:
-    - для актуальных лотов: по ВСЕМ шарам Lot1..Lot7 через Lot.count_across_shards / Lot.query_across_shards_with_limit_offset
-    - для исторических: по таблице HistoricalLot через historical_count / historical_query_with_limit_offset
+    - Актуальные лоты: по всем шарам Lot1..Lot7 через
+      Lot.count_across_shards / Lot.query_across_shards_with_limit_offset
+    - Исторические: через HistoricalLot.historical_count /
+      HistoricalLot.historical_query_with_limit_offset
     """
     try:
         lang = language or "en"
 
-        # ---------- 1. Считаем общее количество ----------
+        # ---------- 1. Общее количество ----------
         if is_historical:
-            # Исторические – отдельная таблица без шардов
             total = await HistoricalLot.historical_count()
         else:
-            # Актуальные – по всем шард-таблицам Lot1..Lot7
             total = await Lot.count_across_shards()
 
         total_pages = ceil(total / per_page) if total > 0 else 0
 
-        # Если вообще нет данных
         if total == 0:
-            return {
+            return json_safe({
                 "items": [],
                 "total": 0,
                 "page": page,
                 "per_page": per_page,
                 "total_pages": 0,
-            }
+            })
 
-        # Проверяем, что запрошенная страница существует
         if page > total_pages:
             raise HTTPException(status_code=404, detail="Страница не найдена")
 
-        # ---------- 2. Offset/limit ----------
+        # ---------- 2. Offset / limit ----------
         offset = (page - 1) * per_page
 
         if is_historical:
-            # Исторические – свои хелперы
             lots = await HistoricalLot.historical_query_with_limit_offset(
                 limit=per_page,
                 offset=offset,
             )
         else:
-            # Актуальные – шардированные Lot1..Lot7
             lots = await Lot.query_across_shards_with_limit_offset(
                 limit=per_page,
                 offset=offset,
             )
 
-        # ---------- 3. Сериализация через get_lot_by_id_from_database ----------
+        # ---------- 3. Получаем данные по внутреннему id ----------
         items: list[dict] = []
-
         for lot in lots:
-            # тут lot – ORM-объект (Lot1..Lot7 или HistoricalLot)
             lot_data = await get_lot_by_id_from_database(
-                id=lot.id,
+                id=lot.id,           # ВНУТРЕННИЙ ID (pk)
                 language=lang,
                 is_historical=is_historical,
             )
             if lot_data:
                 items.append(lot_data)
 
-        return {
+        response = {
             "items": items,
             "total": total,
             "page": page,
@@ -98,9 +92,14 @@ async def get_lots_catalog(
             "total_pages": total_pages,
         }
 
+        # Делаем весь ответ JSON-безопасным
+        return json_safe(response)
+
     except HTTPException:
         raise
     except Exception as e:
+        # чтобы не ловить бесконечно ValueError внутри jsonable_encoder,
+        # возвращаем нормальную ошибку
         raise HTTPException(status_code=500, detail=f"Internal server error: {e}")
     
 

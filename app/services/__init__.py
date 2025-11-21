@@ -6,7 +6,7 @@ from .lot_service import (get_filtered_lots, add_lot,
                            find_lots_by_price_range, delete_lot, filter_copart_hd_images,
                            fetch_history_data, update_lot_with_relations, update_lot,
                            generate_history_dropdown, create_cache_for_catalog, add_sharding_lot,
-                           count_all_active, count_all_auctions_active
+                           count_all_active, count_all_auctions_active, json_safe
                            )
 from .lead_service import (lead_generation, create_new_lead, get_leads, get_lead, 
                            update_lead, delete_lead)
