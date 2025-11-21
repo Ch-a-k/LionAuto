@@ -381,12 +381,6 @@ async def create_cache_for_catalog(cache,language,list_ids, list_vin, is_histori
             lot = await serialize_lot(language,result)
             key = f"{settings.CACHE_KEY}_lot_{lot_id}{language}"
             await cache.set(key, json.dumps(lot), ttl=settings.CACHE_TTL + 180)
-        
-    # for vin in list_vin:
-    #     result = await generate_history_dropdown(vin, is_historical, language)
-    #     if result:
-    #         key = f"{settings.CACHE_KEY}_vin_{vin}{language}"
-    #         await cache.set(key, json.dumps(result), ttl=settings.CACHE_TTL)
 
 
 async def get_lot_by_id_from_database(
@@ -467,10 +461,11 @@ async def get_lot_by_id_from_database(
 
         data: Dict[str, Any] = {}
 
-        # Берём только реальные поля модели (из Tortoise)
-        for f_name in obj._meta.fields_map.keys():
+        # Берём только реальные db-поля, без обратных связей
+        for f_name in getattr(obj._meta, "db_fields", []):
             data[f_name] = getattr(obj, f_name, None)
 
+        # Перевод по slug → name
         slug_val = data.get("slug")
         if slug_val:
             translated = await get_translation(
@@ -694,7 +689,38 @@ async def serialize_lot(language, lot: Lot) -> Dict[str, Any]:
     return lot_dict
 
 
-from typing import List, Union, Optional
+def json_safe(obj: Any) -> Any:
+    """
+    Делает объект JSON-безопасным:
+    - примитивы возвращает как есть
+    - datetime → isoformat()
+    - dict/list/tuple/set обходит рекурсивно
+    - всё остальное → str(obj)
+    """
+    if isinstance(obj, (str, int, float, bool)) or obj is None:
+        return obj
+
+    if isinstance(obj, datetime):
+        return obj.isoformat()
+
+    if isinstance(obj, dict):
+        return {str(k): json_safe(v) for k, v in obj.items()}
+
+    if isinstance(obj, (list, tuple, set)):
+        return [json_safe(v) for v in obj]
+
+    # ORM-объекты и прочие классы с __dict__
+    if hasattr(obj, "__dict__") and not isinstance(obj, type):
+        data = {
+            k: v
+            for k, v in obj.__dict__.items()
+            if not k.startswith("_")
+        }
+        return json_safe(data)
+
+    # Всё остальное (включая ReverseRelation, QuerySet, функции и т.д.) → строка
+    return str(obj)
+
 
 def filter_copart_hd_images(link_img_hd: Optional[Union[str, List[str]]]) -> Optional[List[str]]:
     """
@@ -1708,189 +1734,144 @@ async def find_lots_by_price_range(
     }
 
 
+async def _get_lot_orm_by_internal_id(lot_id: int) -> LotBase | None:
+    """
+    Возвращает ORM-объект лота по ВНУТРЕННЕМУ id (pk), проходя по нужным таблицам.
+
+    Ничего не сериализует, чистый ORM.
+    """
+    prefix = lot_id // 10_000_000
+
+    prefix_to_model = {
+        2: HistoricalLot,
+        3: LotWithoutAuctionDate,
+        4: LotWithouImage,
+        5: LotHistoryAddons,
+        6: LotOtherVehicle,
+        7: LotOtherVehicleHistorical,
+        11: Lot1,
+        12: Lot2,
+        13: Lot3,
+        14: Lot4,
+        15: Lot5,
+        16: Lot6,
+        17: Lot7,
+    }
+
+    model_class = prefix_to_model.get(prefix)
+
+    if model_class is None:
+        # Неизвестный префикс — просто перебираем все таблицы
+        model_classes = [
+            HistoricalLot, LotWithoutAuctionDate, LotWithouImage,
+            LotHistoryAddons, LotOtherVehicle, LotOtherVehicleHistorical,
+            Lot1, Lot2, Lot3, Lot4, Lot5, Lot6, Lot7,
+        ]
+    else:
+        model_classes = [model_class]
+
+    for model in model_classes:
+        lot = await model.filter(id=lot_id).first()
+        if lot is not None:
+            return lot
+
+    return None
+
+
 async def get_similar_lots_by_id(
     lot_id: int,
     limit: int = 5,
-    language: str = "en",
+    language: TransLiteral = "en",
 ) -> List[LotBase]:
     """
-    Возвращает список похожих лотов по внутреннему ID (id, а не lot_id с аукциона).
-
-    1) Берём исходный лот через get_lot_by_id_from_database
-    2) Если это other-vehicle → ищем в LotOtherVehicle / LotOtherVehicleHistorical
-       Иначе → ищем по всем шартам Lot1..Lot7
-    3) Фильтруем только по тому же base_site
-    4) Подбор по набору критериев (make/model, год, цена, одометр, body_type и т.п.)
+    Находит похожие лоты по ВНУТРЕННЕМУ ID лота (pk, а не copart lot_id).
+    Возвращает список ORM-объектов (Lot1..Lot7 или другие модели).
     """
-
-    # ---------- 1. Берём исходный лот ----------
-    original_lot = await get_lot_by_id_from_database(lot_id, language=language)
+    # 1. Находим исходный лот как ORM
+    original_lot = await _get_lot_orm_by_internal_id(lot_id)
     if original_lot is None:
-        raise ValueError(f"Лот с id={lot_id} не найден ни в одной таблице")
+        raise ValueError(f"Лот с ID {lot_id} не найден")
 
-    # ---------- 2. Определяем, где искать похожие ----------
-    is_other_vehicle = isinstance(original_lot, (LotOtherVehicle, LotOtherVehicleHistorical))
-
-    if is_other_vehicle:
-        search_models = [LotOtherVehicle, LotOtherVehicleHistorical]
+    # 2. Определяем, по каким таблицам ищем похожие
+    if isinstance(original_lot, (LotOtherVehicle, LotOtherVehicleHistorical)):
+        shard_classes: List[type[LotBase]] = [LotOtherVehicle]
+    elif isinstance(original_lot, HistoricalLot):
+        shard_classes = [HistoricalLot]
+    elif isinstance(original_lot, (LotWithoutAuctionDate, LotWithouImage)):
+        # Можно искать только среди "без даты / без фото"
+        shard_classes = [type(original_lot)]
     else:
-        # авто → все шарды 1..7
-        search_models = [Lot1, Lot2, Lot3, Lot4, Lot5, Lot6, Lot7]
+        # Обычные автомобили — ищем по всем Lot1..Lot7
+        shard_classes = await Lot.get_all_shards()  # [Lot1..Lot7]
 
-    base_site_id = getattr(original_lot, "base_site_id", None)
+    similar_candidates: List[LotBase] = []
 
-    # ---------- 3. Строим критерии схожести ----------
-    def build_criteria_list(lot) -> List[Q]:
-        crits: List[Q] = []
+    # 3. Собираем кандидатов по всем шардам
+    for shard_cls in shard_classes:
+        qs = shard_cls.filter(~Q(id=original_lot.id))
 
-        # 1. Совпадение марки и модели
-        if lot.make_id and lot.model_id:
-            crits.append(Q(make_id=lot.make_id) & Q(model_id=lot.model_id))
+        # Фильтруем по тому же аукциону (если есть)
+        if getattr(original_lot, "base_site_id", None):
+            qs = qs.filter(base_site_id=original_lot.base_site_id)
 
-        # 2. Совпадение марки + близкий год выпуска
-        if lot.make_id and lot.year:
-            crits.append(
-                Q(make_id=lot.make_id) &
-                Q(year__gte=lot.year - 2) &
-                Q(year__lte=lot.year + 2)
+        # Та же марка / модель, если есть
+        if getattr(original_lot, "make_id", None):
+            qs = qs.filter(make_id=original_lot.make_id)
+        if getattr(original_lot, "model_id", None):
+            qs = qs.filter(model_id=original_lot.model_id)
+
+        # Плюс +/- 3 года
+        if getattr(original_lot, "year", None):
+            qs = qs.filter(
+                year__gte=original_lot.year - 3,
+                year__lte=original_lot.year + 3,
             )
 
-        # 3. Тип кузова + марка + близкая цена
-        if lot.body_type_id and lot.make_id and lot.price:
-            crits.append(
-                Q(body_type_id=lot.body_type_id) &
-                Q(make_id=lot.make_id) &
-                Q(price__gte=lot.price * 0.7) &
-                Q(price__lte=lot.price * 1.3)
-            )
+        # Берём немного с запасом, потом отсортируем
+        shard_list = await qs.limit(limit * 5).all()
+        similar_candidates.extend(shard_list)
 
-        # 4. Тип ТС + год + пробег
-        if lot.vehicle_type_id and lot.year and lot.odometer:
-            crits.append(
-                Q(vehicle_type_id=lot.vehicle_type_id) &
-                Q(year__gte=lot.year - 3) &
-                Q(year__lte=lot.year + 3) &
-                Q(odometer__gte=int(lot.odometer * 0.7)) &
-                Q(odometer__lte=int(lot.odometer * 1.3))
-            )
+    # 4. Убираем дубли по id
+    unique_by_id: dict[int, LotBase] = {}
+    for lot in similar_candidates:
+        unique_by_id[lot.id] = lot
+    unique_candidates = list(unique_by_id.values())
 
-        # 5. Без совпадения марки: близкие год/цена/пробег
-        if lot.year:
-            q = Q(year__gte=lot.year - 1) & Q(year__lte=lot.year + 1)
+    if not unique_candidates:
+        return []
 
-            if lot.price:
-                q &= Q(price__gte=lot.price * 0.8) & Q(price__lte=lot.price * 1.2)
+    # 5. Сортируем по "близости" к исходному лоту
+    def sort_key(l: LotBase):
+        # приоритет — та же марка+модель
+        same_make_model = 0 if (
+            getattr(l, "make_id", None) == getattr(original_lot, "make_id", None)
+            and getattr(l, "model_id", None) == getattr(original_lot, "model_id", None)
+        ) else 1
 
-            if lot.odometer:
-                q &= Q(odometer__gte=int(lot.odometer * 0.8)) & Q(odometer__lte=int(lot.odometer * 1.2))
+        # разница по году
+        if getattr(l, "year", None) and getattr(original_lot, "year", None):
+            year_diff = abs(l.year - original_lot.year)
+        else:
+            year_diff = 9999
 
-            crits.append(q)
+        # разница по цене
+        if getattr(l, "price", None) and getattr(original_lot, "price", None):
+            price_diff = abs(l.price - original_lot.price)
+        else:
+            price_diff = 999_999
 
-        return crits
+        # разница по пробегу
+        if getattr(l, "odometer", None) and getattr(original_lot, "odometer", None):
+            odo_diff = abs(l.odometer - original_lot.odometer)
+        else:
+            odo_diff = 9_999_999
 
-    similar_criteria = build_criteria_list(original_lot)
+        return (same_make_model, year_diff, price_diff, odo_diff)
 
-    # ---------- 4. Ищем похожие по критериям ----------
-    similar_lots: List[LotBase] = []
+    unique_candidates.sort(key=sort_key)
 
-    # чтобы не дергать count каждый раз
-    def already_have(lot_obj) -> bool:
-        return any(l.id == lot_obj.id for l in similar_lots)
-
-    for criteria in similar_criteria:
-        if len(similar_lots) >= limit:
-            break
-
-        for model_cls in search_models:
-            if len(similar_lots) >= limit:
-                break
-
-            qs = model_cls.filter(~Q(id=original_lot.id))
-
-            if base_site_id:
-                qs = qs.filter(base_site_id=base_site_id)
-
-            qs = qs.filter(criteria).prefetch_related(
-                "vehicle_type", "make", "model", "series", "base_site",
-                "damage_pr", "damage_sec", "keys", "odobrand", "fuel",
-                "drive", "transmission", "color", "status", "auction_status",
-                "body_type", "title", "seller_type", "seller",
-                "document", "document_old",
-            )
-
-            batch = await qs.limit(limit - len(similar_lots)).all()
-            for lot in batch:
-                if not already_have(lot):
-                    similar_lots.append(lot)
-                    if len(similar_lots) >= limit:
-                        break
-
-    # ---------- 5. Если мало, добираем просто “похожие по диапазонам” ----------
-    if not is_other_vehicle and len(similar_lots) < limit:
-        remaining = limit - len(similar_lots)
-
-        for model_cls in search_models:
-            if remaining <= 0:
-                break
-
-            qs = model_cls.filter(~Q(id=original_lot.id))
-            if base_site_id:
-                qs = qs.filter(base_site_id=base_site_id)
-
-            if original_lot.year:
-                qs = qs.filter(
-                    year__gte=original_lot.year - 5,
-                    year__lte=original_lot.year + 5,
-                )
-            if original_lot.price:
-                qs = qs.filter(
-                    price__gte=original_lot.price * 0.5,
-                    price__lte=original_lot.price * 1.5,
-                )
-
-            extra = await qs.limit(remaining).prefetch_related(
-                "vehicle_type", "make", "model", "series", "base_site",
-                "damage_pr", "damage_sec", "keys", "odobrand", "fuel",
-                "drive", "transmission", "color", "status", "auction_status",
-                "body_type", "title", "seller_type", "seller",
-                "document", "document_old",
-            ).all()
-
-            for lot in extra:
-                if not already_have(lot):
-                    similar_lots.append(lot)
-                    remaining -= 1
-                    if remaining <= 0:
-                        break
-
-    # ---------- 6. Сортируем по степени схожести ----------
-    def sort_key(x):
-        year_diff = (
-            abs((x.year or 0) - (original_lot.year or 0))
-            if x.year and original_lot.year else 9999
-        )
-        price_diff = (
-            abs((x.price or 0) - (original_lot.price or 0))
-            if x.price and original_lot.price else 999999
-        )
-        odo_diff = (
-            abs((x.odometer or 0) - (original_lot.odometer or 0))
-            if x.odometer and original_lot.odometer else 9999999
-        )
-
-        same_make_model = int(
-            not (x.make_id == original_lot.make_id and x.model_id == original_lot.model_id)
-        )
-
-        return (
-            same_make_model,
-            year_diff,
-            price_diff,
-            odo_diff,
-        )
-
-    similar_lots.sort(key=sort_key)
-    return similar_lots[:limit]
+    # 6. Возвращаем первые N ORM-объектов
+    return unique_candidates[:limit]
 
 
 async def get_lots_by_ids(lot_ids: List[int]) -> List[Lot]:

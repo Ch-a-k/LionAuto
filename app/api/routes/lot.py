@@ -10,7 +10,7 @@ from app.services import (get_lot_by_lot_id_from_database, get_lot_by_id_from_da
                           get_similar_lots_by_id, serialize_lot, get_lots_count_by_vehicle_type,
                           search_lots, get_popular_brands_function, get_special_filtered_lots,
                           get_filtered_lots, create_cache_for_catalog, filter_copart_hd_images,
-                          lot_to_dict, find_lots_by_price_range, generate_history_dropdown)
+                          lot_to_dict, find_lots_by_price_range, generate_history_dropdown, json_safe)
 from typing import List, Optional, Union, Dict, Any
 from app.models import HistoricalLot, Lot
 from app.services.translate_service import get_translation
@@ -755,23 +755,6 @@ async def move_lot_from_id(
     lot_dict = await serialize_lot(language,historical_lot)
         
     return lot_dict
-
-
-# @router.get("/sharder_check/{id}")
-# async def check_sharer(
-#     id: int,
-#     language: str
-# ):
-#     shard_name = Lot.get_shard_name(id)
-#     logger.debug(shard_name)
-#     lt = await get_lot_from_shard(id)
-#     logger.debug(lt)
-    # historical_lot = await Lot.move_to(id, HistoricalLot)
-
-    # # Преобразуем лот в словарь
-    # lot_dict = await serialize_lot(language,historical_lot)
-        
-    # return lot_dict
     
 
 @router.get("/id/{id}")
@@ -782,21 +765,15 @@ async def get_lot_by_id(
 ):
     """
     Получает информацию о лоте по его внутреннему ID (PK с префиксом).
-
-    Args:
-        id: внутренний ID лота (pk, с префиксом 1x / 2x / 11-17)
-        is_historical: подсказка, если хотим искать именно в исторических
-        language: язык перевода справочников
     """
     try:
-        # аккуратный cache_key с учётом языка и флага истории
         cache_key = f"{settings.CACHE_KEY}_lot_{id}_{language}_{'hist' if is_historical else 'cur'}"
 
         cached_result = await cache.get(cache_key)
         if cached_result:
             return json.loads(cached_result)
 
-        # ⚠️ get_lot_by_id_from_database УЖЕ возвращает dict с переводами
+        # dict с переводами (уже, по идее, без ORM)
         lot_dict = await get_lot_by_id_from_database(
             id=id,
             language=language,
@@ -806,27 +783,18 @@ async def get_lot_by_id(
         if not lot_dict:
             raise HTTPException(status_code=404, detail="Лот не найден")
 
-        # Если нужно, здесь можно добавить доп. постобработку (например, copart hd-фильтр):
-        # try:
-        #     base_site = lot_dict.get("base_site") or {}
-        #     if isinstance(base_site, dict) and base_site.get("slug") == "copart":
-        #         lot_dict["link_img_hd"] = filter_copart_hd_images(
-        #             lot_dict.get("link_img_hd")
-        #         )
-        # except Exception as e:
-        #     logger.error(f"Error processing copart images for lot {id}: {e}")
+        # Делаем JSON-безопасным
+        safe_lot = json_safe(lot_dict)
 
-        # Кладём в кеш
-        await cache.set(cache_key, json.dumps(lot_dict))
+        # Кладём в кеш уже безопасную структуру
+        await cache.set(cache_key, json.dumps(safe_lot))
 
-        return lot_dict
+        # Возвращаем тоже безопасную
+        return safe_lot
 
     except HTTPException:
-        # пробрасываем как есть (404 и т.п.)
         raise
     except Exception as e:
-        # лог можно добавить, если хочешь
-        # logger.exception(f"Error in /lot/id/{id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
