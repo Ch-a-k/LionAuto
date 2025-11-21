@@ -820,8 +820,8 @@ async def get_history_car_by_vin(
     is_historical: bool = False,
     language: TransLiteral = "en"
 ):
-    result = await generate_history_dropdown(cache, vin, is_historical, language)
-    return result
+    # тут уже вернётся чистый dict с примитивами
+    return await generate_history_dropdown(cache, vin, is_historical, language)
 
 
 @router.get("/testcache")

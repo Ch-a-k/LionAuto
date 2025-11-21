@@ -21,7 +21,7 @@ from app.services.translate_service import create_model_translations, get_transl
 from app.core.config import settings
 import json
 import random
-
+import inspect
 
 async def get_popular_brands_function(limit: int = 48):
     """
@@ -251,60 +251,101 @@ async def delete_lot(lot_id: int) -> Optional[Dict[str, int]]:
         return None
 
 
+def _serialize_value(value: Any) -> Any:
+    # 1) awaitable → пробуем дождаться, но в generate_history_dropdown мы не await'им здесь,
+    #    поэтому просто на всякий случай защитимся от них строкой.
+    if inspect.isawaitable(value):
+        # вместо await value, чтобы не ломать логику — просто в строку
+        return f"<awaitable:{value.__class__.__name__}>"
+
+    # 2) datetime → ISO-строка
+    if isinstance(value, datetime):
+        return value.isoformat()
+
+    # 3) базовые типы
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+
+    # 4) Enum-подобные (есть .value)
+    if hasattr(value, "value"):
+        try:
+            return _serialize_value(value.value)
+        except Exception:
+            return str(value)
+
+    # 5) всё остальное — в строку
+    return str(value)
+
+
+def serialize_lot_for_history(lot) -> Dict[str, Any]:
+    """Гарантированно JSON-safe dict по лоту."""
+    auction_date = getattr(lot, "auction_date", None)
+
+    base_site = getattr(lot, "base_site", None)
+    color = getattr(lot, "color", None)
+    seller = getattr(lot, "seller", None)
+    seller_type = getattr(lot, "seller_type", None)
+
+    return {
+        "id": _serialize_value(getattr(lot, "id", None)),
+        "lot_id": _serialize_value(getattr(lot, "lot_id", None)),
+        "sale_datetime": _serialize_value(auction_date),
+        "auction_date": _serialize_value(auction_date),
+        "auction": _serialize_value(getattr(base_site, "name", None) if base_site else None),
+        "image_thubnail": _serialize_value(getattr(lot, "image_thubnail", None)),
+        "odometer": _serialize_value(getattr(lot, "odometer", None)),
+        "bid": _serialize_value(getattr(lot, "bid", None)),
+        "current_bid": _serialize_value(getattr(lot, "current_bid", None)),
+        "final_bid": _serialize_value(getattr(lot, "bid", None)),
+        "status": _serialize_value(getattr(lot, "status", None)),
+        "color": _serialize_value(getattr(color, "name", None) if color else None),
+        "seller": _serialize_value(getattr(seller, "name", None) if seller else None),
+        "seller_type": _serialize_value(getattr(seller_type, "name", None) if seller_type else None),
+        "is_historical": _serialize_value(getattr(lot, "is_historical", None)),
+    }
+
+
 async def generate_history_dropdown(cache, vin, is_historical, language):
+    cache_key = f"{settings.CACHE_KEY}_vin_{vin}{language}"
     try:
-        cached_result = await cache.get(f"{settings.CACHE_KEY}_vin_{vin}{language}")
+        # 1) пробуем взять из кеша
+        cached_result = await cache.get(cache_key)
         if cached_result:
-            result_dict = json.loads(cached_result)
-            return result_dict
-        # Get historical data
-        data = []
+            try:
+                return json.loads(cached_result)
+            except Exception as e:
+                logger.error(f"Error decoding cached history for {vin}: {e}")
+
+        # 2) получаем лоты
         lots_data = await search_lots(vin)
-        
+
+        data: List[Dict[str, Any]] = []
         for lot in lots_data:
-            data.append({
-                "id": lot.id,
-                "lot_id": lot.lot_id,
-                "sale_datetime": lot.auction_date,
-                "auction_date": lot.auction_date,
-                "auction": lot.base_site.name if lot.base_site else None,
-                "image_thubnail": lot.image_thubnail,
-                "odometer": lot.odometer,
-                "bid": lot.bid,
-                "current_bid": lot.current_bid,
-                "final_bid": lot.bid,
-                "status": lot.status,
-                "color": lot.color.name if lot.color else None,
-                "seller": lot.seller.name if lot.seller else None,
-                "seller_type": lot.seller_type.name if lot.seller_type else None,
-                "is_historical": lot.is_historical
-            })
-        logger.debug(lots_data)
-        return {
-            "last_bid": 0,
-            "last_auction_date": None,
-            "data": data
+            try:
+                data.append(serialize_lot_for_history(lot))
+            except Exception as e:
+                logger.error(f"Error serializing lot {getattr(lot, 'id', None)} for history: {e}")
+
+        # можно вычислить last_bid / last_auction_date по первому элементу, если нужно
+        last_bid = data[0]["bid"] if data else 0
+        last_auction_date = data[0]["auction_date"] if data else None
+
+        result = {
+            "last_bid": last_bid,
+            "last_auction_date": last_auction_date,
+            "data": data,
         }
-        # data.append({
-        #     "id": lot.id,
-        #     "lot_id": lot.lot_id,
-        #     "sale_datetime": lot.auction_date,
-        #     "auction_date": lot.auction_date,
-        #     "auction": lot.base_site.name if lot.base_site else None,
-        #     "image_thubnail": lot.image_thubnail,
-        #     "odometer": lot.odometer,
-        #     "bid": lot.bid,
-        #     "final_bid": api_data['data']['purchase_price'],
-        #     "status": api_data['data']['sale_status'],
-        #     "color": lot.color.name if lot.color else None,
-        #     "seller": lot.seller.name if lot.seller else None,
-        #     "seller_type": lot.seller_type.name if lot.seller_type else None,
-        #     "is_historical": lot.is_historical
-        # })
+
+        # 3) кладём в кеш уже как строку
+        try:
+            await cache.set(cache_key, json.dumps(result, ensure_ascii=False))
+        except Exception as e:
+            logger.error(f"Error caching history for {vin}: {e}")
+
+        return result
 
     except Exception as e:
         logger.error(f'Error in get history dropdown: {e}')
-
         return {
             "last_bid": 0,
             "last_auction_date": None,
