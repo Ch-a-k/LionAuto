@@ -18,3 +18,11 @@ from .task import router as task_router
 from .additional import router as additional_router
 from .admin import router as admin_router
 from .calculator import router as calculator_router
+
+# New routes
+from .profile import router as profile_router
+from .deposits import router as deposits_router
+from .transactions import router as transactions_router
+from .notifications import router as notifications_router
+from .two_factor import router as two_factor_router
+from .websocket import router as websocket_router
