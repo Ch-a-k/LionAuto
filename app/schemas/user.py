@@ -24,6 +24,21 @@ class UserResponse(UserBase):
     is_active: bool
     kyc_access: bool
 
+    # Profile fields
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    country: Optional[str] = None
+    phone: Optional[str] = None
+    tg_phone: Optional[str] = None
+    tg_username: Optional[str] = None
+    whatsapp_phone: Optional[str] = None
+    viber_phone: Optional[str] = None
+    avatar_url: Optional[str] = None
+
+    # 2FA and balance
+    two_fa_enabled: bool = False
+    balance: float = 0.0
+
     model_config = ConfigDict(from_attributes=True)
 
     # UUID -> str

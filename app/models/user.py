@@ -19,6 +19,25 @@ class User(models.Model):
     is_active = fields.BooleanField(default=True)
     kyc_access = fields.BooleanField(default=False)
     salt = fields.CharField(max_length=32, default=lambda: secrets.token_hex(16))
+
+    # Profile fields
+    avatar_url = fields.CharField(max_length=512, null=True)
+    first_name = fields.CharField(max_length=255, null=True)
+    last_name = fields.CharField(max_length=255, null=True)
+    country = fields.CharField(max_length=255, null=True)
+    phone = fields.CharField(max_length=50, null=True)
+    tg_phone = fields.CharField(max_length=50, null=True)
+    tg_username = fields.CharField(max_length=255, null=True)
+    whatsapp_phone = fields.CharField(max_length=50, null=True)
+    viber_phone = fields.CharField(max_length=50, null=True)
+
+    # 2FA fields
+    two_fa_enabled = fields.BooleanField(default=False)
+    two_fa_secret = fields.CharField(max_length=32, null=True)
+
+    # Balance
+    balance = fields.DecimalField(max_digits=12, decimal_places=2, default=0.00)
+
     created_at = fields.DatetimeField(auto_now_add=True)
     updated_at = fields.DatetimeField(auto_now=True)
     roles = fields.ManyToManyField("models.Role", related_name="users")

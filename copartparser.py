@@ -43,7 +43,7 @@ SEARCH_RESULTS_URL = (
 )
 IMAGE_CONCURRENCY = int(os.getenv("IMAGE_CONCURRENCY", "5")) 
 # START_LINK_INDEX = int(os.getenv("START_LINK_INDEX", "0")) == 539
-START_LINK_INDEX = 539
+START_LINK_INDEX = 0
 # =======================
 # Утилиты
 # =======================
