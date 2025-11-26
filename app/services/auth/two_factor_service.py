@@ -8,7 +8,7 @@ from uuid import UUID
 
 from app.models.user import User
 from app.models.two_factor_auth import TwoFactorBackupCode, TwoFactorAttempt, TwoFactorMethod
-from app.services.notification_service import NotificationService
+from app.services.communication.notification_service import NotificationService
 from app.models.notification import NotificationType
 
 

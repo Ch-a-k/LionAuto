@@ -8,7 +8,7 @@ from app.schemas.transaction import (
     TransactionListResponse,
     BalanceResponse
 )
-from app.services.transaction_service import TransactionService
+from app.services.finance.transaction_service import TransactionService
 
 router = APIRouter()
 
