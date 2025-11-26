@@ -11,7 +11,7 @@ from app.schemas.deposit import (
     DepositResponse,
     DepositListResponse
 )
-from app.services.deposit_service import DepositService
+from app.services.finance.deposit_service import DepositService
 
 router = APIRouter()
 

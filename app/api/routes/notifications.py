@@ -8,7 +8,7 @@ from app.schemas.notification import (
     NotificationPreferenceUpdate,
     NotificationPreferenceResponse
 )
-from app.services.notification_service import NotificationService
+from app.services.communication.notification_service import NotificationService
 
 router = APIRouter()
 

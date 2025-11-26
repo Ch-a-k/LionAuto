@@ -199,7 +199,7 @@ async def test_disable_2fa_wrong_password(client: AsyncClient, test_user: User, 
 @pytest.mark.asyncio
 async def test_backup_code_usage(client: AsyncClient, test_user: User):
     """Test using backup code for login"""
-    from app.services.two_factor_service import TwoFactorService
+    from app.services.auth.two_factor_service import TwoFactorService
 
     # Setup 2FA
     test_user.two_fa_enabled = True

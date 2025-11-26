@@ -5,9 +5,9 @@ from app.models.user import User
 from app.models.deposit import Deposit, DepositStatus
 from app.models.transaction import Transaction, TransactionType
 from app.models.notification import Notification, NotificationType
-from app.services.deposit_service import DepositService
-from app.services.transaction_service import TransactionService
-from app.services.notification_service import NotificationService
+from app.services.finance.deposit_service import DepositService
+from app.services.finance.transaction_service import TransactionService
+from app.services.communication.notification_service import NotificationService
 
 
 @pytest.mark.asyncio

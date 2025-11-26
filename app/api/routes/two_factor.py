@@ -8,7 +8,7 @@ from app.schemas.two_factor import (
     TwoFactorDisableRequest,
     TwoFactorStatusResponse
 )
-from app.services.two_factor_service import TwoFactorService
+from app.services.auth.two_factor_service import TwoFactorService
 
 router = APIRouter()
 
