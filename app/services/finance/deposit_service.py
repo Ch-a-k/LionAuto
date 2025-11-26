@@ -7,7 +7,7 @@ from tortoise.transactions import in_transaction
 from app.models.user import User
 from app.models.deposit import Deposit, DepositStatus
 from app.models.transaction import Transaction, TransactionType, TransactionStatus
-from app.services.notification_service import NotificationService
+from app.services.communication.notification_service import NotificationService
 from app.models.notification import NotificationType
 
 
