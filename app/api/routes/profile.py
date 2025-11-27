@@ -1,9 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
-from uuid import UUID
 
 from app.models.user import User
 from app.api.dependencies import get_current_active_user
 from app.schemas.profile import UserProfileUpdate, UserProfileResponse, AvatarUploadResponse
+from app.services.store.s3contabo import s3_service
+
+from uuid import UUID, uuid4
+from pathlib import Path
+from io import BytesIO
 
 router = APIRouter()
 
@@ -36,15 +40,15 @@ async def upload_avatar(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_active_user)
 ):
-    """Upload user avatar"""
-    # Validate file type
-    if not file.content_type.startswith("image/"):
+    """Upload user avatar to Contabo S3"""
+    # 1) Проверка типа
+    if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="File must be an image"
         )
 
-    # Validate file size (max 5MB)
+    # 2) Проверка размера (max 5MB)
     content = await file.read()
     if len(content) > 5 * 1024 * 1024:
         raise HTTPException(
@@ -52,16 +56,24 @@ async def upload_avatar(
             detail="File size must not exceed 5MB"
         )
 
-    # TODO: Upload to S3 or storage service
-    # For now, we'll just create a placeholder URL
-    # In production, use the existing S3 service in the codebase
+    # 3) Генерация безопасного ключа для S3
+    #    avatars/<user_id>/<uuid4>.<ext>
+    ext = Path(file.filename or "").suffix.lower() or ".jpg"
+    key = f"avatars/{current_user.id}/{uuid4().hex}{ext}"
 
-    # Example:
-    # from app.services.storage import upload_file_to_s3
-    # avatar_url = await upload_file_to_s3(content, file.filename, "avatars")
+    # 4) Загрузка в S3 (public-read)
+    fileobj = BytesIO(content)
+    await s3_service.upload_fileobj(
+        fileobj=fileobj,
+        key=key,
+        content_type=file.content_type,
+        public_read=True,
+    )
 
-    avatar_url = f"https://storage.example.com/avatars/{current_user.id}/{file.filename}"
+    # 5) Публичный URL для фронта
+    avatar_url = s3_service.build_public_url(key)
 
+    # 6) Сохраняем в БД
     current_user.avatar_url = avatar_url
     await current_user.save()
 
@@ -72,8 +84,22 @@ async def upload_avatar(
 async def delete_avatar(
     current_user: User = Depends(get_current_active_user)
 ):
-    """Delete user avatar"""
-    # TODO: Delete from S3 or storage service
+    """Delete user avatar from S3 and clear field"""
+    old_url = current_user.avatar_url
+
+    if old_url:
+        # Пробуем вытащить key из публичного URL
+        base = s3_service.public_base_url.rstrip("/")  # type: ignore[attr-defined]
+        # public_base_url задаётся в S3Service.__init__
+        if old_url.startswith(base + "/"):
+            key = old_url[len(base) + 1 :]
+            try:
+                s3_service.delete_object(key)
+            except Exception:
+                # Лог уже внутри S3Service, тут просто продолжаем,
+                # чтобы не ронять запрос, если объект уже удалён и т.п.
+                pass
+
     current_user.avatar_url = None
     await current_user.save()
 
