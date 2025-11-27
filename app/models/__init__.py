@@ -11,3 +11,7 @@ from .lot import *
 from .translate import Translation, LanguageEnum
 from .lead import Lead
 from .calculator import *
+from .deposit import Deposit
+from .notification import Notification, NotificationPreference
+from .transaction import Transaction
+from .two_factor_auth import TwoFactorBackupCode, TwoFactorAttempt
