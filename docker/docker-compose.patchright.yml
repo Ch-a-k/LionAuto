@@ -163,8 +163,20 @@ services:
         condition: service_healthy
     volumes:
       - ../:/home/celeryuser/app
+      - playwright_cache:/ms-playwright
     ports:
-      - "89:8000"
+      - "89:8000"               # API
+      - "127.0.0.1:5900:5900"   # VNC (x11vnc)
+      - "127.0.0.1:9222:9222"   # CDP (DevTools)
+    environment:
+      HEADLESS: "0"
+      VNC_PASS: "${VNC_PASS:-}" # опционально пароль
+      DISPLAY: ":99"
+      VNC_PORT: "5900"
+      XVFB_W: "1366"
+      XVFB_H: "768"
+      XVFB_D: "24"
+    entrypoint: ["/usr/local/bin/entrypoint.sh"]
     command: ["poetry", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
@@ -190,6 +202,7 @@ services:
       - ../.env
     volumes:
       - ../:/home/celeryuser/app
+      - playwright_cache:/ms-playwright
     command: ["poetry", "run", "celery", "-A", "app.core.config.celery.celery_app", "worker", "--loglevel=info"]
 
   celery:
@@ -215,6 +228,7 @@ services:
       CLAMAV_PORT: 3310
     volumes:
       - ../:/home/celeryuser/app
+      - playwright_cache:/ms-playwright
     command: ["poetry", "run", "celery", "-A", "app.core.config.celery.celery_app", "worker", "--loglevel=info"]
 
 volumes:
@@ -225,3 +239,4 @@ volumes:
   zookeeper_data:
   zookeeper_logs:
   clamav_data:
+  playwright_cache:
