@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import List
 from uuid import UUID
 from app.models.user_watchlist import UserWatchlist
@@ -7,6 +7,8 @@ from app.models.lot import Lot
 from app.schemas.lot import VehicleModel
 from app.api.dependencies import get_current_user
 from tortoise.exceptions import IntegrityError
+from app.services import get_lot_by_id_from_database
+from app.schemas import TransLiteral
 
 router = APIRouter()
 
@@ -14,7 +16,8 @@ MAX_WATCHLIST_SIZE = 100  # Максимальное количество лот
 
 
 @router.post("/lots/{lot_id}/watch", status_code=status.HTTP_201_CREATED)
-async def add_to_watchlist(lot_id: int, user=Depends(get_current_user)):
+async def add_to_watchlist(lot_id: int,is_historical: bool = Query(False),
+    language: TransLiteral = Query("en"), user=Depends(get_current_user)):
     """
     Добавляет лот в список отслеживаемых (watchlist) текущего пользователя.
 
@@ -34,7 +37,11 @@ async def add_to_watchlist(lot_id: int, user=Depends(get_current_user)):
             404 — если лот не найден.
             400 — если превышен лимит в watchlist или лот уже добавлен ранее.
     """
-    lot = await Lot.get_or_none(id=lot_id)
+    lot = await get_lot_by_id_from_database(
+        id=id,
+        language=language,
+        is_historical=is_historical,
+    )
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
 
