@@ -14,7 +14,7 @@ MAX_WATCHLIST_SIZE = 100  # Максимальное количество лот
 
 
 @router.post("/lots/{lot_id}/watch", status_code=status.HTTP_201_CREATED)
-async def add_to_watchlist(lot_id: UUID, user=Depends(get_current_user)):
+async def add_to_watchlist(lot_id: int, user=Depends(get_current_user)):
     """
     Добавляет лот в список отслеживаемых (watchlist) текущего пользователя.
 
@@ -23,7 +23,7 @@ async def add_to_watchlist(lot_id: UUID, user=Depends(get_current_user)):
     Проверяется существование лота и уникальность пары (user_id, lot_id).
 
     Args:
-        lot_id (UUID): Уникальный идентификатор лота.
+        lot_id (int): Уникальный идентификатор лота.
         user: Текущий авторизованный пользователь, полученный из зависимости get_current_user.
 
     Returns:
