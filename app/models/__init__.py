@@ -15,3 +15,4 @@ from .deposit import Deposit
 from .notification import Notification, NotificationPreference
 from .transaction import Transaction
 from .two_factor_auth import TwoFactorBackupCode, TwoFactorAttempt
+from .user_watchlist import UserWatchlist
