@@ -5,7 +5,7 @@ from uuid import uuid4, UUID
 class UserWatchlist(Model):
     id = fields.UUIDField(pk=True, default=uuid4)
     user_id = fields.UUIDField()  # FK на User (можно использовать fields.ForeignKeyField если есть модель User)
-    lot_id = fields.UUIDField()   # FK на Lot
+    lot_id = fields.BigIntField()   # FK на Lot
 
     created_at = fields.DatetimeField(auto_now_add=True)
 
