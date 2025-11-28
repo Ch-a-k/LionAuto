@@ -76,7 +76,7 @@ async def remove_from_watchlist(lot_id: UUID, user=Depends(get_current_user)):
     return
 
 
-@router.get("/lots/watchlist", response_model=List[VehicleModel])
+@router.get("/lots/watchlist")
 async def get_watchlist(language: TransLiteral = Query("en"), user=Depends(get_current_user)):
     """
     Возвращает список всех лотов, добавленных пользователем в watchlist.
