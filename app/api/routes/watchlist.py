@@ -77,7 +77,7 @@ async def remove_from_watchlist(lot_id: UUID, user=Depends(get_current_user)):
 
 
 @router.get("/lots/watchlist", response_model=List[VehicleModel])
-async def get_watchlist(user=Depends(get_current_user)):
+async def get_watchlist(language: TransLiteral = Query("en"), user=Depends(get_current_user)):
     """
     Возвращает список всех лотов, добавленных пользователем в watchlist.
 
@@ -93,5 +93,11 @@ async def get_watchlist(user=Depends(get_current_user)):
     """
     entries = await UserWatchlist.filter(user_id=user.id).all()
     lot_ids = [entry.lot_id for entry in entries]
-    lots = await Lot.filter(id__in=lot_ids)
-    return [VehicleModel.from_orm(lot) for lot in lots]
+    result = []
+    for lot_id in lot_ids:
+        lot = await get_lot_by_id_from_database(
+            id=lot_id,
+            language=language,
+        )
+        result.append(lot)
+    return result
