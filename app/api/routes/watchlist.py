@@ -38,7 +38,7 @@ async def add_to_watchlist(lot_id: int,is_historical: bool = Query(False),
             400 — если превышен лимит в watchlist или лот уже добавлен ранее.
     """
     lot = await get_lot_by_id_from_database(
-        id=id,
+        id=lot_id,
         language=language,
         is_historical=is_historical,
     )
