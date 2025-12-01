@@ -2486,6 +2486,7 @@ async def get_filtered_lots(
             "is_buynow": is_buynow,
             "risk_index__gte": min_risk_index,
             "risk_index__lte": max_risk_index,
+            # TODO: Uncomment after testing
             # "auction_date__gte": auction_date_filter,
             # "auction_date__lte": auction_date_to,
             "is_historical": is_historical
