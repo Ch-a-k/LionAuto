@@ -3,8 +3,8 @@ from app.schemas.marketplace.country import CountryCreate, CountryRead, CountryL
 from app.services.marketplace.country import create_country, get_country_by_code, get_all_countries
 from app.schemas.marketplace.brand import BrandRead
 from app.services.marketplace.brand import get_all_brands
-from app.schemas.marketplace.model import CarModelListResponse
-from app.services.marketplace.model import get_models_with_translations
+from app.schemas.marketplace.model import CarModelListResponse, CarModelDetailRead
+from app.services.marketplace.model import get_models_with_translations, get_car_model_by_id
 from app.schemas.marketplace.language import LanguageRead
 from app.services.marketplace.language import get_all_languages
 from typing import List, Optional
@@ -69,3 +69,13 @@ async def list_car_models(
     except Exception as e:
         logging.exception("Error in list_car_models", e)
         raise HTTPException(status_code=500, detail="Failed to fetch models")
+
+@router.get("/car-models/{model_id}", response_model=CarModelDetailRead)
+async def get_car_model(
+    model_id: int,
+    lang: str = Query("en", min_length=2, max_length=2, pattern=r"^[a-z]{2}$")
+):
+    model_data = await get_car_model_by_id(model_id, lang)
+    if not model_data:
+        raise HTTPException(status_code=404, detail="Model not found")
+    return model_data

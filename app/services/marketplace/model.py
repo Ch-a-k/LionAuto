@@ -288,3 +288,117 @@ async def get_models_with_translations(
 
     total = rows[0]["total"]
     return rows, total
+
+
+async def get_car_model_by_id(model_id: int, lang: str = "en"):
+    query = """
+    WITH
+    slogans AS (
+        SELECT model_id, jsonb_object_agg(language_code, value) AS translations
+        FROM model_attributes
+        WHERE attribute_type_id = (SELECT id FROM attribute_types WHERE code = 'slogan')
+        GROUP BY model_id
+    ),
+    engines AS (
+        SELECT model_id, jsonb_object_agg(language_code, value) AS translations
+        FROM model_attributes
+        WHERE attribute_type_id = (SELECT id FROM attribute_types WHERE code = 'engine')
+        GROUP BY model_id
+    ),
+    fuel_types AS (
+        SELECT model_id, jsonb_object_agg(language_code, value) AS translations
+        FROM model_attributes
+        WHERE attribute_type_id = (SELECT id FROM attribute_types WHERE code = 'fuel_type')
+        GROUP BY model_id
+    ),
+    drive_types AS (
+        SELECT model_id, jsonb_object_agg(language_code, value) AS translations
+        FROM model_attributes
+        WHERE attribute_type_id = (SELECT id FROM attribute_types WHERE code = 'drive_type')
+        GROUP BY model_id
+    ),
+    transmissions AS (
+        SELECT model_id, jsonb_object_agg(language_code, value) AS translations
+        FROM model_attributes
+        WHERE attribute_type_id = (SELECT id FROM attribute_types WHERE code = 'transmission')
+        GROUP BY model_id
+    ),
+    suspensions AS (
+        SELECT model_id, jsonb_object_agg(language_code, value) AS translations
+        FROM model_attributes
+        WHERE attribute_type_id = (SELECT id FROM attribute_types WHERE code = 'suspension')
+        GROUP BY model_id
+    ),
+    interiors_attrs AS (
+        SELECT model_id, jsonb_object_agg(language_code, value) AS translations
+        FROM model_attributes
+        WHERE attribute_type_id = (SELECT id FROM attribute_types WHERE code = 'interior')
+        GROUP BY model_id
+    ),
+    body_colors AS (
+        SELECT
+            model_id,
+            jsonb_object_agg(language_code, color_list) AS translations
+        FROM (
+            SELECT
+                model_id,
+                language_code,
+                string_agg(color_name, ', ' ORDER BY color_name) AS color_list
+            FROM model_colors
+            WHERE color_type_id = (SELECT id FROM color_types WHERE code = 'body')
+            GROUP BY model_id, language_code
+        ) AS grouped
+        GROUP BY model_id
+    ),
+    interior_colors AS (
+        SELECT
+            model_id,
+            jsonb_object_agg(language_code, color_list) AS translations
+        FROM (
+            SELECT
+                model_id,
+                language_code,
+                string_agg(color_name, ', ' ORDER BY color_name) AS color_list
+            FROM model_colors
+            WHERE color_type_id = (SELECT id FROM color_types WHERE code = 'interior')
+            GROUP BY model_id, language_code
+        ) AS grouped
+        GROUP BY model_id
+    )
+    SELECT
+        m.id,
+        m.brand_id,
+        b.name AS brand_name,
+        m.model_name,
+        m.year,
+        m.length_mm,
+        m.width_mm,
+        m.height_mm,
+        m.wheelbase_mm,
+        COALESCE(s.translations->>$1, s.translations->>'en') AS slogan,
+        COALESCE(e.translations->>$1, e.translations->>'en') AS engine,
+        COALESCE(ft.translations->>$1, ft.translations->>'en') AS fuel_type,
+        COALESCE(dt.translations->>$1, dt.translations->>'en') AS drive_type,
+        COALESCE(tr.translations->>$1, tr.translations->>'en') AS transmission,
+        COALESCE(susp.translations->>$1, susp.translations->>'en') AS suspension,
+        COALESCE(ia.translations->>$1, ia.translations->>'en') AS interior,
+        COALESCE(bc.translations->>$1, bc.translations->>'en') AS body_colors,
+        COALESCE(ic.translations->>$1, ic.translations->>'en') AS interior_colors
+    FROM models m
+    JOIN brands b ON m.brand_id = b.id
+    LEFT JOIN slogans s ON s.model_id = m.id
+    LEFT JOIN engines e ON e.model_id = m.id
+    LEFT JOIN fuel_types ft ON ft.model_id = m.id
+    LEFT JOIN drive_types dt ON dt.model_id = m.id
+    LEFT JOIN transmissions tr ON tr.model_id = m.id
+    LEFT JOIN suspensions susp ON susp.model_id = m.id
+    LEFT JOIN interiors_attrs ia ON ia.model_id = m.id
+    LEFT JOIN body_colors bc ON bc.model_id = m.id
+    LEFT JOIN interior_colors ic ON ic.model_id = m.id
+    WHERE m.id = $2
+    """
+    
+    conn = Tortoise.get_connection("default")
+    rows = await conn.execute_query_dict(query, [lang, model_id])
+    
+    return rows[0] if rows else None
