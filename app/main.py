@@ -13,7 +13,7 @@ from app.api.routes import (
     bot_session_router, debug_router,
     lot_router, trans_router, lead_router,
     nhts_router, task_router,
-    additional_router, admin_router, calculator_router,
+    additional_router, admin_router, admin_marketplace_router, marketplace_router, calculator_router,
     profile_router, deposits_router, transactions_router,
     notifications_router, two_factor_router, websocket_router
 )
@@ -222,6 +222,8 @@ app.include_router(nhts_router, prefix="/nhts", tags=["NHTS"], dependencies=[Dep
 app.include_router(task_router, prefix="/task", tags=["Task"], dependencies=[Depends(get_current_user)])
 app.include_router(additional_router, prefix="/additional", tags=["Additional"], dependencies=[Depends(validate_api_key)])
 app.include_router(admin_router, prefix="/admin", tags=["Admin"], dependencies=[Depends(get_current_user)])
+app.include_router(admin_marketplace_router, prefix="/admin/marketplace", tags=["Admin"], dependencies=[Depends(get_current_user)])
+app.include_router(marketplace_router, prefix="/marketplace", tags=["Marketplace"])
 app.include_router(calculator_router, prefix="/calculator", tags=["Calculator"])
 
 # New routes

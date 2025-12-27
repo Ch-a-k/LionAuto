@@ -17,6 +17,8 @@ from .nhts import router as nhts_router
 from .task import router as task_router
 from .additional import router as additional_router
 from .admin import router as admin_router
+from .admin_marketplace import router as admin_marketplace_router
+from .marketplace import router as marketplace_router
 from .calculator import router as calculator_router
 
 # New routes

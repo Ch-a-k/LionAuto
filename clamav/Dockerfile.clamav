@@ -1,5 +1,5 @@
 # Optional build arg for use elsewhere
-FROM clamav/clamav:1.2.0
+FROM clamav/clamav:1.5
 
 # Install dependencies
 RUN apk add --no-cache bash curl

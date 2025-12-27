@@ -16,3 +16,11 @@ from .notification import Notification, NotificationPreference
 from .transaction import Transaction
 from .two_factor_auth import TwoFactorBackupCode, TwoFactorAttempt
 from .user_watchlist import UserWatchlist
+from .marketplace.country import Country
+from .marketplace.brand import Brand
+from .marketplace.attribute import AttributeType
+from .marketplace.color import ColorType
+from .marketplace.language import Language
+from .marketplace.model import CarModel
+from .marketplace.translation import ModelAttribute
+from .marketplace.translation import ModelColor

@@ -28,7 +28,9 @@ ENV PORT=8000
 # --- Установка Poetry под приложным пользователем ---
 USER celeryuser
 WORKDIR $HOME
-RUN curl -sSL https://install.python-poetry.org | python3 - && poetry --version
+RUN pip install --upgrade pip && \
+    pip install "poetry==1.8.3" && \
+    poetry --version
 
 # --- Установка зависимостей проекта ---
 WORKDIR $PROJECT_ROOT
