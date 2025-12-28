@@ -395,7 +395,7 @@ async with in_transaction():
 ```bash
 git clone https://github.com/sashabodiul/la-auction
 cd la-auction
-cp .env.example .env
+cp env.example .env
 # Отредактируйте .env с вашими настройками
 ```
 

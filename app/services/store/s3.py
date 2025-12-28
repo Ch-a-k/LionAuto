@@ -4,8 +4,15 @@ from fastapi import HTTPException
 from loguru import logger
 from app.core.config import settings
 
+_s3_service: "S3Service | None" = None
+
 class S3Service:
     def __init__(self):
+        if not settings.S3_BUCKET_NAME:
+            raise HTTPException(status_code=500, detail="S3 bucket name is not configured")
+        if not settings.S3_ACCESS_KEY or not settings.S3_SECRET_KEY:
+            raise HTTPException(status_code=500, detail="S3 credentials are not configured")
+
         self.client = boto3.client(
             's3',
             aws_access_key_id=settings.S3_ACCESS_KEY,
@@ -87,4 +94,14 @@ class S3Service:
             logger.error(f"URL generation failed: {e}")
             raise HTTPException(500, "Failed to generate download URL")
 
-s3_service = S3Service()
+def get_s3_service() -> S3Service:
+    """
+    Lazy singleton.
+
+    Important: do NOT create S3 client at import time, otherwise the whole FastAPI app
+    fails to boot when S3/MinIO is temporarily unavailable or misconfigured.
+    """
+    global _s3_service
+    if _s3_service is None:
+        _s3_service = S3Service()
+    return _s3_service

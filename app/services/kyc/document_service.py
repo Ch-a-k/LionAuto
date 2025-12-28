@@ -1,6 +1,6 @@
 from uuid import uuid4
 from fastapi import UploadFile, HTTPException
-from app.services.store.s3 import s3_service
+from app.services.store.s3 import get_s3_service
 from app.enums.document_type import DocumentType
 
 class DocumentService:
@@ -26,7 +26,7 @@ class DocumentService:
         object_name = f"users/{user_id}/{doc_type.value}-{uuid4()}.{ext}"
         
         try:
-            return await s3_service.upload_file(file, object_name)
+            return await get_s3_service().upload_file(file, object_name)
         except Exception as e:
             raise HTTPException(
                 status_code=500,
