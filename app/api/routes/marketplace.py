@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, status, Body
 from app.schemas.marketplace.country import CountryCreate, CountryRead, CountryListResponse
 from app.services.marketplace.country import create_country, get_country_by_code, get_all_countries
 from app.schemas.marketplace.brand import BrandRead
 from app.services.marketplace.brand import get_all_brands
 from app.schemas.marketplace.model import CarModelListResponse, CarModelDetailRead
-from app.services.marketplace.model import get_models_with_translations, get_car_model_by_id
+from app.services.marketplace.model import get_models_with_translations, get_car_model_by_id, delete_model_images
 from app.schemas.marketplace.language import LanguageRead
 from app.services.marketplace.language import get_all_languages
 from typing import List, Optional
@@ -79,3 +79,13 @@ async def get_car_model(
     if not model_data:
         raise HTTPException(status_code=404, detail="Model not found")
     return model_data
+
+@router.delete("/car-model-images", status_code=status.HTTP_200_OK)
+async def delete_car_model_images(
+    image_ids: List[int] = Body(..., embed=True)
+):
+    if not image_ids:
+        raise HTTPException(status_code=400, detail="Image IDs list cannot be empty")
+    
+    deleted_count = await delete_model_images(image_ids)
+    return {"deleted_count": deleted_count}

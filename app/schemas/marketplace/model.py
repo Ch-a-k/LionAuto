@@ -26,6 +26,9 @@ class CarModelCreate(BaseModel):
     attributes: List[AttributeInput] = Field(default_factory=list)
     colors: List[ColorInput] = Field(default_factory=list)
 
+class ImageObject(BaseModel):
+    id: int
+    url: str
 
 class CarModelDetailRead(BaseModel):
     id: int
@@ -46,7 +49,7 @@ class CarModelDetailRead(BaseModel):
     interior: str | None
     body_colors: str | None     # "Black, White"
     interior_colors: str | None # "Beige, Red"
-    image_paths: List[str] = []
+    image_objects: List[ImageObject] = []
 
     model_config = ConfigDict(from_attributes=True)
 

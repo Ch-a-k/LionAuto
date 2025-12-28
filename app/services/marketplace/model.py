@@ -15,6 +15,7 @@ from typing import List
 from fastapi import UploadFile
 from app.models.marketplace.model_image import CarModelImage
 from app.core.config import settings
+import json
 
 MEDIA_ROOT = settings.media_root
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -53,6 +54,23 @@ async def save_model_images(model_id: int, files: List[UploadFile]) -> List[str]
         await CarModelImage.create(model=model, image_path=relative_path)
 
     return saved_paths
+
+async def delete_model_images(image_ids: List[int]) -> int:
+    if not image_ids:
+        return 0
+
+    images = await CarModelImage.filter(id__in=image_ids).all()
+    
+    deleted_count = 0
+    for img in images:
+        file_path = settings.media_root / img.image_path
+        if file_path.exists():
+            file_path.unlink()
+
+        await img.delete()
+        deleted_count += 1
+
+    return deleted_count
 
 # --- CREATE ---
 async def create_car_model(data: CarModelCreate) -> CarModel:
@@ -286,7 +304,12 @@ async def get_models_with_translations(
     model_images AS (
         SELECT
             model_id,
-            ARRAY_AGG(image_path ORDER BY id) AS image_paths
+            jsonb_agg(
+                jsonb_build_object(
+                    'id', id,
+                    'url', image_path
+                ) ORDER BY id
+            ) AS image_objects
         FROM car_model_images
         GROUP BY model_id
     ),
@@ -315,7 +338,7 @@ async def get_models_with_translations(
         COALESCE(ia.translations->>$1, ia.translations->>'en') AS interior,
         COALESCE(bc.translations->>$1, bc.translations->>'en') AS body_colors,
         COALESCE(ic.translations->>$1, ic.translations->>'en') AS interior_colors,
-        COALESCE(mi.image_paths, ARRAY[]::TEXT[]) AS image_paths,
+        COALESCE(mi.image_objects, '[]'::jsonb) AS image_objects,
         (SELECT total FROM total_count) AS total
     FROM models m
     JOIN brands b ON m.brand_id = b.id
@@ -339,6 +362,12 @@ async def get_models_with_translations(
 
     if not rows:
         return [], 0
+
+    processed_rows = []
+    for row in rows:
+        if "image_objects" in row and isinstance(row["image_objects"], str):
+            row["image_objects"] = json.loads(row["image_objects"])
+        processed_rows.append(row)
 
     total = rows[0]["total"]
     return rows, total
@@ -422,10 +451,15 @@ async def get_car_model_by_id(model_id: int, lang: str = "en"):
     model_images AS (
         SELECT
             model_id,
-            ARRAY_AGG(image_path ORDER BY id) AS image_paths
+            jsonb_agg(
+                jsonb_build_object(
+                    'id', id,
+                    'url', image_path
+                ) ORDER BY id
+            ) AS image_objects
         FROM car_model_images
         GROUP BY model_id
-    ),
+    )
     SELECT
         m.id,
         m.brand_id,
@@ -445,7 +479,7 @@ async def get_car_model_by_id(model_id: int, lang: str = "en"):
         COALESCE(ia.translations->>$1, ia.translations->>'en') AS interior,
         COALESCE(bc.translations->>$1, bc.translations->>'en') AS body_colors,
         COALESCE(ic.translations->>$1, ic.translations->>'en') AS interior_colors,
-        COALESCE(mi.image_paths, ARRAY[]::TEXT[]) AS image_paths
+        COALESCE(mi.image_objects, '[]'::jsonb) AS image_objects
     FROM models m
     JOIN brands b ON m.brand_id = b.id
     LEFT JOIN slogans s ON s.model_id = m.id
@@ -464,4 +498,11 @@ async def get_car_model_by_id(model_id: int, lang: str = "en"):
     conn = Tortoise.get_connection("default")
     rows = await conn.execute_query_dict(query, [lang, model_id])
     
-    return rows[0] if rows else None
+    if not rows:
+        return None
+
+    row = rows[0]
+    if "image_objects" in row and isinstance(row["image_objects"], str):
+        row["image_objects"] = json.loads(row["image_objects"])
+    
+    return row
