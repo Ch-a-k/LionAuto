@@ -46,6 +46,7 @@ class CarModelDetailRead(BaseModel):
     interior: str | None
     body_colors: str | None     # "Black, White"
     interior_colors: str | None # "Beige, Red"
+    image_paths: List[str] = []
 
     model_config = ConfigDict(from_attributes=True)
 

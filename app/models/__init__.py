@@ -24,3 +24,4 @@ from .marketplace.language import Language
 from .marketplace.model import CarModel
 from .marketplace.translation import ModelAttribute
 from .marketplace.translation import ModelColor
+from .marketplace.model_image import CarModelImage

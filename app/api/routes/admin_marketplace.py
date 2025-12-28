@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Query, HTTPException, Body, status
+from fastapi import APIRouter, Query, HTTPException, Body, status, File, UploadFile
 from app.schemas.marketplace.country import CountryCreate, CountryRead
 from app.services.marketplace.country import create_country, get_country_by_code
 from app.schemas.marketplace.brand import BrandCreate, BrandRead
@@ -11,6 +11,7 @@ from app.schemas.marketplace.attribute import AttributeTypeCreate, AttributeType
 from app.services.marketplace.attribute import create_attribute_type, get_all_attribute_types
 from app.schemas.marketplace.language import LanguageCreate, LanguageRead
 from app.services.marketplace.language import create_language
+from app.services.marketplace.model import save_model_images
 from typing import List
 import logging
 
@@ -85,3 +86,19 @@ async def delete_car_models_endpoint(
     
     deleted_count = await delete_car_models(model_ids)
     return {"deleted_count": deleted_count}
+
+@router.post("/car-models/{model_id}/images", status_code=status.HTTP_201_CREATED)
+async def upload_model_images(
+    model_id: int,
+    files: List[UploadFile] = File(..., description="List of image files (jpg, png, webp)"),
+):
+    try:
+        saved_paths = await save_model_images(model_id, files)
+        return {
+            "uploaded_count": len(saved_paths),
+            "image_paths": saved_paths
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Failed to upload images")

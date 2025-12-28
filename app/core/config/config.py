@@ -1,6 +1,7 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import List
 from hashlib import sha256
+from pathlib import Path
 
 class Settings(BaseSettings):
     """Конфигурация приложения из .env и другие настройки"""
@@ -92,6 +93,8 @@ class Settings(BaseSettings):
 
     CACHE_KEY: str = "lot_refine_automobile"
     CACHE_TTL: int = 1800
+    
+    media_root: Path = Path("/var/www/media")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

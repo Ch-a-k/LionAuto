@@ -8,6 +8,51 @@ from app.schemas.marketplace.model import CarModelCreate
 from tortoise.exceptions import DoesNotExist
 from tortoise import Tortoise
 from tortoise.transactions import in_transaction
+from pathlib import Path
+import os
+import uuid
+from typing import List
+from fastapi import UploadFile
+from app.models.marketplace.model_image import CarModelImage
+from app.core.config import settings
+
+MEDIA_ROOT = settings.media_root
+ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+MAX_FILE_SIZE = 10 * 1024 * 1024  
+
+async def save_model_images(model_id: int, files: List[UploadFile]) -> List[str]:
+    model = await CarModel.get_or_none(id=model_id)
+    if not model:
+        raise ValueError("Model not found")
+
+    # Путь: /var/www/media/car_models/{model_id}/
+    model_dir = MEDIA_ROOT / "car_models" / str(model_id)
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths = []
+    for file in files:
+        if not file.filename:
+            continue
+        ext = Path(file.filename).suffix.lower()
+        if ext not in ALLOWED_EXTENSIONS:
+            raise ValueError(f"Invalid file extension: {ext}. Allowed: {ALLOWED_EXTENSIONS}")
+        
+        content = await file.read()
+        if len(content) > MAX_FILE_SIZE:
+            raise ValueError(f"File too large: {file.filename} (max {MAX_FILE_SIZE // 1024 // 1024} MB)")
+        
+        safe_filename = f"{uuid.uuid4().hex}{ext}"
+        file_path = model_dir / safe_filename
+
+        with open(file_path, "wb") as f:
+            f.write(content)
+
+        # Относительный путь от MEDIA_ROOT (для БД и URL)
+        relative_path = f"car_models/{model_id}/{safe_filename}"
+        saved_paths.append(relative_path)
+        await CarModelImage.create(model=model, image_path=relative_path)
+
+    return saved_paths
 
 # --- CREATE ---
 async def create_car_model(data: CarModelCreate) -> CarModel:
@@ -238,6 +283,13 @@ async def get_models_with_translations(
         ) AS grouped
         GROUP BY model_id
     ),
+    model_images AS (
+        SELECT
+            model_id,
+            ARRAY_AGG(image_path ORDER BY id) AS image_paths
+        FROM car_model_images
+        GROUP BY model_id
+    ),
     total_count AS (
         SELECT COUNT(*) AS total
         FROM models m
@@ -263,6 +315,7 @@ async def get_models_with_translations(
         COALESCE(ia.translations->>$1, ia.translations->>'en') AS interior,
         COALESCE(bc.translations->>$1, bc.translations->>'en') AS body_colors,
         COALESCE(ic.translations->>$1, ic.translations->>'en') AS interior_colors,
+        COALESCE(mi.image_paths, ARRAY[]::TEXT[]) AS image_paths,
         (SELECT total FROM total_count) AS total
     FROM models m
     JOIN brands b ON m.brand_id = b.id
@@ -275,6 +328,7 @@ async def get_models_with_translations(
     LEFT JOIN interiors_attrs ia ON ia.model_id = m.id
     LEFT JOIN body_colors bc ON bc.model_id = m.id
     LEFT JOIN interior_colors ic ON ic.model_id = m.id
+    LEFT JOIN model_images mi ON mi.model_id = m.id
     {where_sql}
     ORDER BY b.name, m.model_name
     {limit_offset}
@@ -364,7 +418,14 @@ async def get_car_model_by_id(model_id: int, lang: str = "en"):
             GROUP BY model_id, language_code
         ) AS grouped
         GROUP BY model_id
-    )
+    ),
+    model_images AS (
+        SELECT
+            model_id,
+            ARRAY_AGG(image_path ORDER BY id) AS image_paths
+        FROM car_model_images
+        GROUP BY model_id
+    ),
     SELECT
         m.id,
         m.brand_id,
@@ -383,7 +444,8 @@ async def get_car_model_by_id(model_id: int, lang: str = "en"):
         COALESCE(susp.translations->>$1, susp.translations->>'en') AS suspension,
         COALESCE(ia.translations->>$1, ia.translations->>'en') AS interior,
         COALESCE(bc.translations->>$1, bc.translations->>'en') AS body_colors,
-        COALESCE(ic.translations->>$1, ic.translations->>'en') AS interior_colors
+        COALESCE(ic.translations->>$1, ic.translations->>'en') AS interior_colors,
+        COALESCE(mi.image_paths, ARRAY[]::TEXT[]) AS image_paths
     FROM models m
     JOIN brands b ON m.brand_id = b.id
     LEFT JOIN slogans s ON s.model_id = m.id
@@ -395,6 +457,7 @@ async def get_car_model_by_id(model_id: int, lang: str = "en"):
     LEFT JOIN interiors_attrs ia ON ia.model_id = m.id
     LEFT JOIN body_colors bc ON bc.model_id = m.id
     LEFT JOIN interior_colors ic ON ic.model_id = m.id
+    LEFT JOIN model_images mi ON mi.model_id = m.id
     WHERE m.id = $2
     """
     
