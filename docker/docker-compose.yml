@@ -191,6 +191,7 @@ services:
       - ../.env
     volumes:
       - ../:/home/celeryuser/app
+      - /var/www/media:/var/www/media
     command: ["poetry", "run", "celery", "-A", "app.core.config.celery.celery_app", "worker", "--loglevel=info"]
 
   celery:
