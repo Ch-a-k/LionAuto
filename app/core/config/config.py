@@ -43,7 +43,8 @@ class Settings(BaseSettings):
         "http://localhost:3001",
         "http://127.0.0.1:3001",
         "https://fadder.vercel.app",
-        "http://fadder.vercel.app"
+        "http://fadder.vercel.app",
+        "http://37.60.253.236:90"
 
     ]
     
@@ -93,7 +94,7 @@ class Settings(BaseSettings):
 
     CACHE_KEY: str = "lot_refine_automobile"
     CACHE_TTL: int = 1800
-    
+
     media_root: Path = Path("/var/www/media")
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
