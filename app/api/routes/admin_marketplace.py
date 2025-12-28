@@ -101,4 +101,5 @@ async def upload_model_images(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
+        print("IMAGE ERORR___________________", e)
         raise HTTPException(status_code=500, detail="Failed to upload images")
