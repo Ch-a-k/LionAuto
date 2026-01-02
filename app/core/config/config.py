@@ -42,10 +42,9 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3000",
         "http://localhost:3001",
         "http://127.0.0.1:3001",
-        "https://fadder.vercel.app",
-        "http://fadder.vercel.app",
+        "https://fadder-eight.vercel.app",
+        "https://fadder-admin.vercel.app",
         "http://37.60.253.236:90"
-
     ]
     
 
